@@ -6,16 +6,15 @@
 #![deny(missing_docs)]
 
 pub mod address;
+pub mod batch;
 pub mod error;
 pub mod order;
-pub mod batch;
-pub mod solution;
 pub mod price;
+pub mod solution;
 
 pub use address::Address;
+pub use batch::{Batch, BatchId};
 pub use error::{OxDexError, Result};
 pub use order::{Order, OrderId, OrderKind, OrderStatus, SignedOrder};
-pub use batch::{Batch, BatchId};
-pub use solution::{ClearingPrice, Solution, TradeExecution};
 pub use price::Price;
-
+pub use solution::{ClearingPrice, Solution, TradeExecution};

@@ -15,13 +15,19 @@ pub struct Address(pub [u8; 32]);
 
 impl Address {
     /// Construct an [`Address`] from raw bytes.
-    pub const fn new(bytes: [u8; 32]) -> Self { Self(bytes) }
+    pub const fn new(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
 
     /// All-zero "system" address (useful as a sentinel/default).
-    pub const fn zero() -> Self { Self([0u8; 32]) }
+    pub const fn zero() -> Self {
+        Self([0u8; 32])
+    }
 
     /// Borrow the underlying bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] { &self.0 }
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
 }
 
 impl fmt::Debug for Address {
@@ -44,7 +50,8 @@ impl FromStr for Address {
             .map_err(|e| OxDexError::InvalidAddress(format!("base58 decode: {e}")))?;
         if bytes.len() != 32 {
             return Err(OxDexError::InvalidAddress(format!(
-                "expected 32 bytes, got {}", bytes.len()
+                "expected 32 bytes, got {}",
+                bytes.len()
             )));
         }
         let mut arr = [0u8; 32];
@@ -91,4 +98,3 @@ mod tests {
         assert_eq!(a, b);
     }
 }
-

@@ -18,7 +18,7 @@ fn make_orders(n: usize, pairs: usize) -> Vec<SignedOrder> {
                 sell_mint: sell,
                 buy_mint: buy,
                 sell_amount: rng.gen_range(100..10_000),
-                buy_amount:  rng.gen_range(100..10_000),
+                buy_amount: rng.gen_range(100..10_000),
                 valid_to: i64::MAX,
                 nonce: i as u64,
                 kind: OrderKind::Sell,
@@ -51,4 +51,3 @@ fn bench_matching(c: &mut Criterion) {
 
 criterion_group!(benches, bench_matching);
 criterion_main!(benches);
-

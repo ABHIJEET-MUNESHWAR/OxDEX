@@ -44,8 +44,8 @@ impl From<RepoError> for OxDexError {
     fn from(e: RepoError) -> Self {
         match e {
             RepoError::Duplicate(id) => OxDexError::Conflict(format!("order {id} exists")),
-            RepoError::NotFound(id)  => OxDexError::NotFound(format!("order {id}")),
-            RepoError::Backend(s)    => OxDexError::Storage(s),
+            RepoError::NotFound(id) => OxDexError::NotFound(format!("order {id}")),
+            RepoError::Backend(s) => OxDexError::Storage(s),
         }
     }
 }
@@ -81,4 +81,3 @@ pub trait OrderRepository: Send + Sync + 'static {
     /// Sweep expired open orders, marking them `Expired`. Returns count.
     async fn expire_due(&self, now_unix_secs: i64) -> RepoResult<u64>;
 }
-

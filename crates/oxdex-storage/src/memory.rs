@@ -20,12 +20,18 @@ pub struct InMemoryOrderRepository {
 
 impl InMemoryOrderRepository {
     /// Construct an empty repository.
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Number of records currently held. O(1) amortised.
-    pub fn len(&self) -> usize { self.inner.len() }
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
     /// Whether the repo is empty.
-    pub fn is_empty(&self) -> bool { self.inner.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
 }
 
 #[async_trait]
@@ -59,16 +65,22 @@ impl OrderRepository for InMemoryOrderRepository {
     }
 
     async fn get(&self, id: &OrderId) -> RepoResult<OrderRecord> {
-        self.inner.get(id).map(|r| r.value().clone()).ok_or(RepoError::NotFound(*id))
+        self.inner
+            .get(id)
+            .map(|r| r.value().clone())
+            .ok_or(RepoError::NotFound(*id))
     }
 
     async fn list_open(&self, pair: Option<(Address, Address)>) -> RepoResult<Vec<OrderRecord>> {
-        let v = self.inner.iter()
+        let v = self
+            .inner
+            .iter()
             .filter(|r| r.value().status == OrderStatus::Open)
             .filter(|r| match pair {
                 None => true,
-                Some((s, b)) => r.value().signed.order.sell_mint == s
-                              && r.value().signed.order.buy_mint == b,
+                Some((s, b)) => {
+                    r.value().signed.order.sell_mint == s && r.value().signed.order.buy_mint == b
+                }
             })
             .map(|r| r.value().clone())
             .collect();
@@ -84,16 +96,24 @@ impl OrderRepository for InMemoryOrderRepository {
     ) -> RepoResult<()> {
         let mut entry = self.inner.get_mut(id).ok_or(RepoError::NotFound(*id))?;
         entry.status = status;
-        if let Some(s) = filled_sell { entry.filled_sell = s; }
-        if let Some(b) = filled_buy  { entry.filled_buy  = b; }
+        if let Some(s) = filled_sell {
+            entry.filled_sell = s;
+        }
+        if let Some(b) = filled_buy {
+            entry.filled_buy = b;
+        }
         entry.updated_at = Utc::now();
         Ok(())
     }
 
     async fn cancel(&self, id: &OrderId, owner: &Address) -> RepoResult<bool> {
         let mut entry = self.inner.get_mut(id).ok_or(RepoError::NotFound(*id))?;
-        if entry.signed.order.owner != *owner { return Ok(false); }
-        if entry.status != OrderStatus::Open { return Ok(false); }
+        if entry.signed.order.owner != *owner {
+            return Ok(false);
+        }
+        if entry.status != OrderStatus::Open {
+            return Ok(false);
+        }
         entry.status = OrderStatus::Cancelled;
         entry.updated_at = Utc::now();
         Ok(true)
@@ -130,7 +150,10 @@ mod tests {
             partial_fill: true,
             receiver: Address([1u8; 32]),
         };
-        SignedOrder { order: o, signature: [0u8; 64] }
+        SignedOrder {
+            order: o,
+            signature: [0u8; 64],
+        }
     }
 
     #[tokio::test]
@@ -168,10 +191,15 @@ mod tests {
     async fn list_open_filters_by_pair() {
         let r = InMemoryOrderRepository::new();
         r.insert(signed_for(1000, 1)).await.unwrap();
-        let v = r.list_open(Some((Address([2u8; 32]), Address([3u8; 32])))).await.unwrap();
+        let v = r
+            .list_open(Some((Address([2u8; 32]), Address([3u8; 32]))))
+            .await
+            .unwrap();
         assert_eq!(v.len(), 1);
-        let v = r.list_open(Some((Address([9u8; 32]), Address([3u8; 32])))).await.unwrap();
+        let v = r
+            .list_open(Some((Address([9u8; 32]), Address([3u8; 32]))))
+            .await
+            .unwrap();
         assert!(v.is_empty());
     }
 }
-

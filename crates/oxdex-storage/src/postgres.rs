@@ -22,11 +22,7 @@ pub struct PgOrderRepository {
 
 impl PgOrderRepository {
     /// Build a connection pool and run migrations.
-    pub async fn connect(
-        url: &str,
-        min_conn: u32,
-        max_conn: u32,
-    ) -> RepoResult<Self> {
+    pub async fn connect(url: &str, min_conn: u32, max_conn: u32) -> RepoResult<Self> {
         let pool = PgPoolOptions::new()
             .max_connections(max_conn)
             .min_connections(min_conn)
@@ -46,15 +42,22 @@ impl PgOrderRepository {
     }
 
     /// Borrow the underlying pool (e.g. for health checks).
-    pub fn pool(&self) -> &PgPool { &self.pool }
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
+    }
 }
 
-fn map_err(e: sqlx::Error) -> RepoError { RepoError::Backend(e.to_string()) }
+fn map_err(e: sqlx::Error) -> RepoError {
+    RepoError::Backend(e.to_string())
+}
 
 fn row_to_record(row: &sqlx::postgres::PgRow) -> RepoResult<OrderRecord> {
     let id_bytes: Vec<u8> = row.try_get("id").map_err(map_err)?;
     if id_bytes.len() != 32 {
-        return Err(RepoError::Backend(format!("bad id length {}", id_bytes.len())));
+        return Err(RepoError::Backend(format!(
+            "bad id length {}",
+            id_bytes.len()
+        )));
     }
     let mut id_arr = [0u8; 32];
     id_arr.copy_from_slice(&id_bytes);
@@ -68,14 +71,14 @@ fn row_to_record(row: &sqlx::postgres::PgRow) -> RepoResult<OrderRecord> {
         .ok_or_else(|| RepoError::Backend(format!("bad status {status_str}")))?;
 
     let filled_sell: i64 = row.try_get("filled_sell").map_err(map_err)?;
-    let filled_buy:  i64 = row.try_get("filled_buy").map_err(map_err)?;
+    let filled_buy: i64 = row.try_get("filled_buy").map_err(map_err)?;
 
     Ok(OrderRecord {
         id: OrderId(id_arr),
         signed,
         status,
         filled_sell: filled_sell as u64,
-        filled_buy:  filled_buy  as u64,
+        filled_buy: filled_buy as u64,
         created_at: row.try_get("created_at").map_err(map_err)?,
         updated_at: row.try_get("updated_at").map_err(map_err)?,
     })
@@ -91,7 +94,7 @@ impl OrderRepository for PgOrderRepository {
             .map_err(|e| RepoError::Backend(format!("encode signed: {e}")))?;
         let owner = signed.order.owner.as_bytes().to_vec();
         let sell_mint = signed.order.sell_mint.as_bytes().to_vec();
-        let buy_mint  = signed.order.buy_mint.as_bytes().to_vec();
+        let buy_mint = signed.order.buy_mint.as_bytes().to_vec();
         let valid_to = signed.order.valid_to;
 
         let res = sqlx::query(
@@ -120,8 +123,11 @@ impl OrderRepository for PgOrderRepository {
             // Conflict: fetch existing and compare.
             None => {
                 let existing = self.get(&id).await?;
-                if existing.signed == signed { Ok(existing) }
-                else { Err(RepoError::Duplicate(id)) }
+                if existing.signed == signed {
+                    Ok(existing)
+                } else {
+                    Err(RepoError::Duplicate(id))
+                }
             }
         }
     }
@@ -135,25 +141,30 @@ impl OrderRepository for PgOrderRepository {
         .fetch_optional(&self.pool)
         .await
         .map_err(map_err)?;
-        row.ok_or(RepoError::NotFound(*id)).and_then(|r| row_to_record(&r))
+        row.ok_or(RepoError::NotFound(*id))
+            .and_then(|r| row_to_record(&r))
     }
 
     async fn list_open(&self, pair: Option<(Address, Address)>) -> RepoResult<Vec<OrderRecord>> {
-        let rows = match pair {
-            None => sqlx::query(
-                r#"SELECT id, signed, status, filled_sell, filled_buy, created_at, updated_at
+        let rows =
+            match pair {
+                None => sqlx::query(
+                    r#"SELECT id, signed, status, filled_sell, filled_buy, created_at, updated_at
                    FROM orders WHERE status = 'open'"#,
-            )
-            .fetch_all(&self.pool).await,
-            Some((s, b)) => sqlx::query(
-                r#"SELECT id, signed, status, filled_sell, filled_buy, created_at, updated_at
+                )
+                .fetch_all(&self.pool)
+                .await,
+                Some((s, b)) => sqlx::query(
+                    r#"SELECT id, signed, status, filled_sell, filled_buy, created_at, updated_at
                    FROM orders
                    WHERE status = 'open' AND sell_mint = $1 AND buy_mint = $2"#,
-            )
-            .bind(s.as_bytes().to_vec())
-            .bind(b.as_bytes().to_vec())
-            .fetch_all(&self.pool).await,
-        }.map_err(map_err)?;
+                )
+                .bind(s.as_bytes().to_vec())
+                .bind(b.as_bytes().to_vec())
+                .fetch_all(&self.pool)
+                .await,
+            }
+            .map_err(map_err)?;
 
         rows.iter().map(row_to_record).collect()
     }
@@ -183,7 +194,11 @@ impl OrderRepository for PgOrderRepository {
         .await
         .map_err(map_err)?;
 
-        if res.rows_affected() == 0 { Err(RepoError::NotFound(*id)) } else { Ok(()) }
+        if res.rows_affected() == 0 {
+            Err(RepoError::NotFound(*id))
+        } else {
+            Ok(())
+        }
     }
 
     async fn cancel(&self, id: &OrderId, owner: &Address) -> RepoResult<bool> {
@@ -217,4 +232,3 @@ impl OrderRepository for PgOrderRepository {
         Ok(res.rows_affected())
     }
 }
-

@@ -34,13 +34,18 @@ pub struct ReferenceSolver {
 impl ReferenceSolver {
     /// Construct a reference solver identified by `address`.
     pub fn new(address: Address) -> Self {
-        Self { address, matcher: Matcher::default() }
+        Self {
+            address,
+            matcher: Matcher::default(),
+        }
     }
 }
 
 #[async_trait]
 impl Solver for ReferenceSolver {
-    fn address(&self) -> Address { self.address }
+    fn address(&self) -> Address {
+        self.address
+    }
 
     async fn solve(&self, batch: &Batch, deadline: Duration) -> Result<Solution> {
         let matcher = self.matcher;
@@ -49,14 +54,13 @@ impl Solver for ReferenceSolver {
         let orders = batch.orders.clone();
 
         // Run CPU-bound work on a blocking thread so we never stall the reactor.
-        let join = tokio::task::spawn_blocking(move || {
-            matcher.match_batch(batch_id, address, &orders)
-        });
+        let join =
+            tokio::task::spawn_blocking(move || matcher.match_batch(batch_id, address, &orders));
 
         match tokio::time::timeout(deadline, join).await {
             Ok(Ok(sol)) => Ok(sol),
-            Ok(Err(e))  => Err(OxDexError::Internal(format!("solver join: {e}"))),
-            Err(_)      => Err(OxDexError::Internal("solver deadline exceeded".into())),
+            Ok(Err(e)) => Err(OxDexError::Internal(format!("solver join: {e}"))),
+            Err(_) => Err(OxDexError::Internal("solver deadline exceeded".into())),
         }
     }
 }
@@ -69,9 +73,12 @@ mod tests {
     #[tokio::test]
     async fn solves_empty_batch() {
         let s = ReferenceSolver::new(Address::zero());
-        let b = Batch { id: BatchId::new(), sealed_at: 0, orders: vec![] };
+        let b = Batch {
+            id: BatchId::new(),
+            sealed_at: 0,
+            orders: vec![],
+        };
         let sol = s.solve(&b, Duration::from_millis(500)).await.unwrap();
         assert!(sol.trades.is_empty());
     }
 }
-

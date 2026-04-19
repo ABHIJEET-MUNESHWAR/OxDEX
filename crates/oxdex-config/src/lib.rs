@@ -82,21 +82,39 @@ impl Settings {
         let _ = dotenvy::dotenv();
 
         let run_mode = std::env::var("RUN_MODE").unwrap_or_else(|_| "development".into());
-        let cfg_dir = PathBuf::from(std::env::var("OXDEX_CONFIG_DIR").unwrap_or_else(|_| "config".into()));
+        let cfg_dir =
+            PathBuf::from(std::env::var("OXDEX_CONFIG_DIR").unwrap_or_else(|_| "config".into()));
 
         let mut builder = ::config::Config::builder()
             // baked-in defaults
-            .set_default("server.bind", "0.0.0.0:8080").map_err(cfg_err)?
-            .set_default("server.workers", 4i64).map_err(cfg_err)?
-            .set_default("database.url", "postgres://oxdex:oxdex@localhost:5432/oxdex").map_err(cfg_err)?
-            .set_default("database.max_connections", 20i64).map_err(cfg_err)?
-            .set_default("database.min_connections", 2i64).map_err(cfg_err)?
-            .set_default("auction.batch_interval_ms", 800i64).map_err(cfg_err)?
-            .set_default("auction.solver_timeout_ms", 200i64).map_err(cfg_err)?
-            .set_default("auction.min_solvers", 1i64).map_err(cfg_err)?
-            .set_default("solana.rpc_url", "https://api.mainnet-beta.solana.com").map_err(cfg_err)?
-            .set_default("jito.block_engine_url", "https://mainnet.block-engine.jito.wtf").map_err(cfg_err)?
-            .set_default("jito.tip_lamports", 10_000i64).map_err(cfg_err)?;
+            .set_default("server.bind", "0.0.0.0:8080")
+            .map_err(cfg_err)?
+            .set_default("server.workers", 4i64)
+            .map_err(cfg_err)?
+            .set_default(
+                "database.url",
+                "postgres://oxdex:oxdex@localhost:5432/oxdex",
+            )
+            .map_err(cfg_err)?
+            .set_default("database.max_connections", 20i64)
+            .map_err(cfg_err)?
+            .set_default("database.min_connections", 2i64)
+            .map_err(cfg_err)?
+            .set_default("auction.batch_interval_ms", 800i64)
+            .map_err(cfg_err)?
+            .set_default("auction.solver_timeout_ms", 200i64)
+            .map_err(cfg_err)?
+            .set_default("auction.min_solvers", 1i64)
+            .map_err(cfg_err)?
+            .set_default("solana.rpc_url", "https://api.mainnet-beta.solana.com")
+            .map_err(cfg_err)?
+            .set_default(
+                "jito.block_engine_url",
+                "https://mainnet.block-engine.jito.wtf",
+            )
+            .map_err(cfg_err)?
+            .set_default("jito.tip_lamports", 10_000i64)
+            .map_err(cfg_err)?;
 
         // optional file layers
         let default_file = cfg_dir.join("default.toml");
@@ -120,7 +138,9 @@ impl Settings {
     }
 }
 
-fn cfg_err<E: std::fmt::Display>(e: E) -> OxDexError { OxDexError::Config(e.to_string()) }
+fn cfg_err<E: std::fmt::Display>(e: E) -> OxDexError {
+    OxDexError::Config(e.to_string())
+}
 
 #[cfg(test)]
 mod tests {
@@ -144,4 +164,3 @@ mod tests {
         std::env::remove_var("OXDEX__SERVER__BIND");
     }
 }
-

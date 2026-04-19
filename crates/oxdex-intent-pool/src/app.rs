@@ -25,13 +25,13 @@ pub async fn build_app(state: AppState, bind: &str, workers: usize) -> std::io::
             .wrap(TracingLogger::default())
             .wrap(Cors::permissive())
             .route("/healthz", web::get().to(handlers::healthz))
-            .route("/readyz",  web::get().to(handlers::readyz))
+            .route("/readyz", web::get().to(handlers::readyz))
             .service(
                 web::scope("/v1/orders")
-                    .route("",       web::post().to(handlers::submit_order))
-                    .route("",       web::get().to(handlers::list_orders))
-                    .route("/{id}",  web::get().to(handlers::get_order))
-                    .route("/{id}",  web::delete().to(handlers::cancel_order)),
+                    .route("", web::post().to(handlers::submit_order))
+                    .route("", web::get().to(handlers::list_orders))
+                    .route("/{id}", web::get().to(handlers::get_order))
+                    .route("/{id}", web::delete().to(handlers::cancel_order)),
             )
     })
     .workers(workers.max(1))
@@ -66,7 +66,10 @@ mod tests {
             receiver: owner,
         };
         let sig = sk.sign(&order.id().0);
-        SignedOrder { order, signature: sig.to_bytes() }
+        SignedOrder {
+            order,
+            signature: sig.to_bytes(),
+        }
     }
 
     #[actix_web::test]
@@ -74,9 +77,11 @@ mod tests {
         let repo: Arc<dyn OrderRepository> = Arc::new(InMemoryOrderRepository::new());
         let st = State { repo };
         let app = test::init_service(
-            App::new().app_data(web::Data::new(st))
-                .route("/healthz", web::get().to(handlers::healthz))
-        ).await;
+            App::new()
+                .app_data(web::Data::new(st))
+                .route("/healthz", web::get().to(handlers::healthz)),
+        )
+        .await;
         let req = test::TestRequest::get().uri("/healthz").to_request();
         let resp = test::call_service(&app, req).await;
         assert!(resp.status().is_success());
@@ -87,34 +92,38 @@ mod tests {
         let repo: Arc<dyn OrderRepository> = Arc::new(InMemoryOrderRepository::new());
         let st = State { repo: repo.clone() };
         let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(st))
-                .service(
-                    web::scope("/v1/orders")
-                        .route("",       web::post().to(handlers::submit_order))
-                        .route("/{id}",  web::get().to(handlers::get_order))
-                        .route("/{id}",  web::delete().to(handlers::cancel_order)),
-                )
-        ).await;
+            App::new().app_data(web::Data::new(st)).service(
+                web::scope("/v1/orders")
+                    .route("", web::post().to(handlers::submit_order))
+                    .route("/{id}", web::get().to(handlers::get_order))
+                    .route("/{id}", web::delete().to(handlers::cancel_order)),
+            ),
+        )
+        .await;
 
         let signed = signed_order();
         let owner_b58 = signed.order.owner.to_string();
         let id_hex = signed.order.id().to_hex();
 
         // submit
-        let req = test::TestRequest::post().uri("/v1/orders")
+        let req = test::TestRequest::post()
+            .uri("/v1/orders")
             .set_json(serde_json::json!({ "signed": signed }))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status().as_u16(), 201, "submit failed");
 
         // get
-        let req = test::TestRequest::get().uri(&format!("/v1/orders/{}", id_hex)).to_request();
+        let req = test::TestRequest::get()
+            .uri(&format!("/v1/orders/{}", id_hex))
+            .to_request();
         let resp = test::call_service(&app, req).await;
         assert!(resp.status().is_success());
 
         // cancel without owner header => 400
-        let req = test::TestRequest::delete().uri(&format!("/v1/orders/{}", id_hex)).to_request();
+        let req = test::TestRequest::delete()
+            .uri(&format!("/v1/orders/{}", id_hex))
+            .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status().as_u16(), 400);
 
@@ -134,17 +143,18 @@ mod tests {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(st))
-                .route("/v1/orders", web::post().to(handlers::submit_order))
-        ).await;
+                .route("/v1/orders", web::post().to(handlers::submit_order)),
+        )
+        .await;
 
         let mut signed = signed_order();
         signed.signature[0] ^= 0xFF; // tamper
 
-        let req = test::TestRequest::post().uri("/v1/orders")
+        let req = test::TestRequest::post()
+            .uri("/v1/orders")
             .set_json(serde_json::json!({ "signed": signed }))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status().as_u16(), 400);
     }
 }
-

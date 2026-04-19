@@ -7,7 +7,7 @@
 //!  * `GET    /v1/orders/{id}`      — fetch one
 //!  * `GET    /v1/orders?status=open[&sell_mint=…&buy_mint=…]` — list
 //!  * `DELETE /v1/orders/{id}`      — cancel (owner check via `X-Owner` header,
-//!                                    in production this would be a signed nonce)
+//!    in production this would be a signed nonce)
 //!  * `GET    /metrics`             — Prometheus
 //!
 //! All handlers return JSON `ApiError { code, message }` on failure.
@@ -15,8 +15,7 @@
 #![allow(missing_docs)] // internal HTTP service crate
 
 pub mod app;
-pub mod handlers;
 pub mod errors;
+pub mod handlers;
 
 pub use app::{build_app, AppState};
-

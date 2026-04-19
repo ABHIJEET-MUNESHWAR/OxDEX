@@ -40,8 +40,8 @@ use std::collections::HashMap;
 use tracing::{debug, instrument};
 
 use oxdex_types::{
-    Address, BatchId, ClearingPrice, Order, OrderId, OrderKind, Price, SignedOrder,
-    Solution, TradeExecution,
+    Address, BatchId, ClearingPrice, Order, OrderId, OrderKind, Price, SignedOrder, Solution,
+    TradeExecution,
 };
 
 /// Configuration knobs for the engine.
@@ -51,7 +51,9 @@ pub struct MatcherConfig {
     pub parallel: bool,
 }
 impl Default for MatcherConfig {
-    fn default() -> Self { Self { parallel: true } }
+    fn default() -> Self {
+        Self { parallel: true }
+    }
 }
 
 /// Stateless matching engine.
@@ -62,7 +64,9 @@ pub struct Matcher {
 
 impl Matcher {
     /// Construct with custom config.
-    pub fn new(cfg: MatcherConfig) -> Self { Self { cfg } }
+    pub fn new(cfg: MatcherConfig) -> Self {
+        Self { cfg }
+    }
 
     /// Match a batch of signed orders, producing one [`Solution`].
     ///
@@ -87,11 +91,13 @@ impl Matcher {
 
         // Each pair is independent — rayon them.
         let per_pair: Vec<PairOutcome> = if self.cfg.parallel {
-            pairs.into_par_iter()
+            pairs
+                .into_par_iter()
                 .map(|((a, b), os)| match_pair(a, b, &os))
                 .collect()
         } else {
-            pairs.into_iter()
+            pairs
+                .into_iter()
                 .map(|((a, b), os)| match_pair(a, b, &os))
                 .collect()
         };
@@ -106,18 +112,28 @@ impl Matcher {
             score = score.saturating_add(p.surplus);
         }
 
-        Solution { batch_id, solver, clearing_prices: clearing, trades, score }
+        Solution {
+            batch_id,
+            solver,
+            clearing_prices: clearing,
+            trades,
+            score,
+        }
     }
 }
 
 fn canonical_pair(a: Address, b: Address) -> (Address, Address) {
-    if a <= b { (a, b) } else { (b, a) }
+    if a <= b {
+        (a, b)
+    } else {
+        (b, a)
+    }
 }
 
 struct PairOutcome {
     clearing: Vec<ClearingPrice>,
-    trades:   Vec<TradeExecution>,
-    surplus:  u128,
+    trades: Vec<TradeExecution>,
+    surplus: u128,
 }
 
 /// Match orders for a single canonical pair `(token_a, token_b)`.
@@ -128,13 +144,20 @@ fn match_pair(token_a: Address, token_b: Address, orders: &[&Order]) -> PairOutc
     let mut a_to_b: Vec<&Order> = Vec::new();
     let mut b_to_a: Vec<&Order> = Vec::new();
     for o in orders {
-        if o.sell_mint == token_a && o.buy_mint == token_b { a_to_b.push(o); }
-        else if o.sell_mint == token_b && o.buy_mint == token_a { b_to_a.push(o); }
+        if o.sell_mint == token_a && o.buy_mint == token_b {
+            a_to_b.push(o);
+        } else if o.sell_mint == token_b && o.buy_mint == token_a {
+            b_to_a.push(o);
+        }
         // else: malformed routing — skip silently.
     }
 
     if a_to_b.is_empty() || b_to_a.is_empty() {
-        return PairOutcome { clearing: vec![], trades: vec![], surplus: 0 };
+        return PairOutcome {
+            clearing: vec![],
+            trades: vec![],
+            surplus: 0,
+        };
     }
 
     // Sort: A→B by best (lowest) limit price ascending so the most aggressive sellers
@@ -142,8 +165,8 @@ fn match_pair(token_a: Address, token_b: Address, orders: &[&Order]) -> PairOutc
     //
     // limit_price_ab = buy_b / sell_a   (lower = wants less B per A = aggressive seller of A)
     // limit_price_ba = buy_a / sell_b   (lower = wants less A per B = aggressive seller of B)
-    a_to_b.sort_by(|x, y| x.limit_price().cmp(&y.limit_price()));
-    b_to_a.sort_by(|x, y| x.limit_price().cmp(&y.limit_price()));
+    a_to_b.sort_by_key(|x| x.limit_price());
+    b_to_a.sort_by_key(|x| x.limit_price());
 
     // Compute running fills. For each pair, the cross condition is:
     //   limit_price_ab * limit_price_ba <= 1     (rationally: ab.num*ba.num <= ab.den*ba.den)
@@ -171,28 +194,34 @@ fn match_pair(token_a: Address, token_b: Address, orders: &[&Order]) -> PairOutc
         let lp_ba = ob.limit_price(); // A per B
 
         // Cross check: lp_ab.num*lp_ba.num <= lp_ab.den*lp_ba.den
-        let lhs = (lp_ab.num as u128).saturating_mul(lp_ba.num as u128);
-        let rhs = (lp_ab.den as u128).saturating_mul(lp_ba.den as u128);
-        if lhs > rhs { break; }
+        let lhs = lp_ab.num.saturating_mul(lp_ba.num);
+        let rhs = lp_ab.den.saturating_mul(lp_ba.den);
+        if lhs > rhs {
+            break;
+        }
         last_cross = Some((lp_ab, lp_ba));
 
         // How much A can we move? oa still has `a_remaining[i]` of A to sell.
         // ob is willing to *buy* up to `ob.buy_amount * (b_remaining[j]/ob.sell_amount)` A.
         let a_left = a_remaining[i];
-        let ob_a_capacity = (b_remaining[j])
-            .saturating_mul(ob.buy_amount as u128)
+        let ob_a_capacity = (b_remaining[j]).saturating_mul(ob.buy_amount as u128)
             / (ob.sell_amount.max(1) as u128);
         let trade_a = a_left.min(ob_a_capacity);
 
         if trade_a == 0 {
             // numerical edge: advance whichever side is exhausted
-            if a_left == 0 { i += 1; } else { j += 1; }
+            if a_left == 0 {
+                i += 1;
+            } else {
+                j += 1;
+            }
             continue;
         }
 
         // Corresponding B for this A move at the *book* (not clearing) ratio for accounting;
         // we'll re-price everything at the uniform clearing price after the loop.
-        let trade_b = trade_a.saturating_mul(ob.sell_amount as u128) / (ob.buy_amount.max(1) as u128);
+        let trade_b =
+            trade_a.saturating_mul(ob.sell_amount as u128) / (ob.buy_amount.max(1) as u128);
 
         a_remaining[i] = a_left.saturating_sub(trade_a);
         b_remaining[j] = b_remaining[j].saturating_sub(trade_b);
@@ -206,32 +235,42 @@ fn match_pair(token_a: Address, token_b: Address, orders: &[&Order]) -> PairOutc
             // rollback last
             a_remaining[i] = a_remaining[i].saturating_add(trade_a);
             b_remaining[j] = b_remaining[j].saturating_add(trade_b);
-            fills_ab.pop(); fills_ba.pop();
+            fills_ab.pop();
+            fills_ba.pop();
             i += 1;
             continue;
         }
         if !ob.partial_fill && b_remaining[j] != 0 {
             a_remaining[i] = a_remaining[i].saturating_add(trade_a);
             b_remaining[j] = b_remaining[j].saturating_add(trade_b);
-            fills_ab.pop(); fills_ba.pop();
+            fills_ab.pop();
+            fills_ba.pop();
             j += 1;
             continue;
         }
 
-        if a_remaining[i] == 0 { i += 1; }
-        if b_remaining[j] == 0 { j += 1; }
+        if a_remaining[i] == 0 {
+            i += 1;
+        }
+        if b_remaining[j] == 0 {
+            j += 1;
+        }
     }
 
     if fills_ab.is_empty() {
-        return PairOutcome { clearing: vec![], trades: vec![], surplus: 0 };
+        return PairOutcome {
+            clearing: vec![],
+            trades: vec![],
+            surplus: 0,
+        };
     }
 
     // Uniform clearing price for B-per-A: midpoint between the last two crossed limit prices.
     // mid(p, 1/q) where p = lp_ab (B/A), q = lp_ba (A/B), as rationals.
     //   mid = (p + 1/q) / 2 = (p.num*q.num + p.den*q.den) / (2 * p.den * q.num)
     let (lp_ab, lp_ba) = last_cross.expect("must exist if fills_ab non-empty");
-    let num = (lp_ab.num.saturating_mul(lp_ba.num))
-        .saturating_add(lp_ab.den.saturating_mul(lp_ba.den));
+    let num =
+        (lp_ab.num.saturating_mul(lp_ba.num)).saturating_add(lp_ab.den.saturating_mul(lp_ba.den));
     let den = lp_ab.den.saturating_mul(lp_ba.num).saturating_mul(2);
     let p_b_per_a = Price::new(num.max(1), den.max(1)).unwrap_or(Price { num: 1, den: 1 });
 
@@ -239,9 +278,13 @@ fn match_pair(token_a: Address, token_b: Address, orders: &[&Order]) -> PairOutc
     // For A→B orders: executed_sell = Σ trade_a; executed_buy = clearing_price * Σ trade_a.
     // For B→A orders: executed_sell = Σ trade_b; executed_buy = (1/clearing) * Σ trade_b.
     let mut sum_a_per_order: HashMap<usize, u128> = HashMap::new();
-    for (i, sa, _) in &fills_ab { *sum_a_per_order.entry(*i).or_default() += *sa; }
+    for (i, sa, _) in &fills_ab {
+        *sum_a_per_order.entry(*i).or_default() += *sa;
+    }
     let mut sum_b_per_order: HashMap<usize, u128> = HashMap::new();
-    for (j, sb, _) in &fills_ba { *sum_b_per_order.entry(*j).or_default() += *sb; }
+    for (j, sb, _) in &fills_ba {
+        *sum_b_per_order.entry(*j).or_default() += *sb;
+    }
 
     let mut trades: Vec<TradeExecution> = Vec::new();
     let mut surplus: u128 = 0;
@@ -252,56 +295,83 @@ fn match_pair(token_a: Address, token_b: Address, orders: &[&Order]) -> PairOutc
         let order = a_to_b[idx];
         // Surplus vs. limit: extra B above what the user would have accepted.
         let min_b = order.limit_price().apply(sold_a);
-        if bought_b >= min_b { surplus = surplus.saturating_add(bought_b - min_b); }
+        if bought_b >= min_b {
+            surplus = surplus.saturating_add(bought_b - min_b);
+        }
         trades.push(TradeExecution {
             order_id: order.id(),
             executed_sell: clamp_u64(sold_a),
-            executed_buy:  clamp_u64(bought_b),
+            executed_buy: clamp_u64(bought_b),
         });
     }
 
     // B→A side: clearing for A-per-B is reciprocal of p_b_per_a.
-    let p_a_per_b = Price { num: p_b_per_a.den, den: p_b_per_a.num.max(1) };
+    let p_a_per_b = Price {
+        num: p_b_per_a.den,
+        den: p_b_per_a.num.max(1),
+    };
     for (idx, sold_b) in sum_b_per_order {
         let bought_a = p_a_per_b.apply(sold_b);
         let order = b_to_a[idx];
         let min_a = order.limit_price().apply(sold_b);
-        if bought_a >= min_a { surplus = surplus.saturating_add(bought_a - min_a); }
+        if bought_a >= min_a {
+            surplus = surplus.saturating_add(bought_a - min_a);
+        }
         trades.push(TradeExecution {
             order_id: order.id(),
             executed_sell: clamp_u64(sold_b),
-            executed_buy:  clamp_u64(bought_a),
+            executed_buy: clamp_u64(bought_a),
         });
     }
 
     PairOutcome {
         clearing: vec![
-            ClearingPrice { mint: token_a, price: p_a_per_b },
-            ClearingPrice { mint: token_b, price: p_b_per_a },
+            ClearingPrice {
+                mint: token_a,
+                price: p_a_per_b,
+            },
+            ClearingPrice {
+                mint: token_b,
+                price: p_b_per_a,
+            },
         ],
         trades,
         surplus,
     }
 }
 
-fn clamp_u64(v: u128) -> u64 { if v > u64::MAX as u128 { u64::MAX } else { v as u64 } }
+fn clamp_u64(v: u128) -> u64 {
+    if v > u64::MAX as u128 {
+        u64::MAX
+    } else {
+        v as u64
+    }
+}
 
 /// Avoid `unused` warning when `OrderKind`/`OrderId` aren't used directly.
-#[doc(hidden)] pub fn _types_in_use(_a: OrderKind, _b: OrderId) {}
+#[doc(hidden)]
+pub fn _types_in_use(_a: OrderKind, _b: OrderId) {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use oxdex_types::{Order, OrderKind};
 
-    fn order(owner: u8, sell: Address, buy: Address, sell_amt: u64, buy_amt: u64, valid_to: i64) -> SignedOrder {
+    fn order(
+        owner: u8,
+        sell: Address,
+        buy: Address,
+        sell_amt: u64,
+        buy_amt: u64,
+        valid_to: i64,
+    ) -> SignedOrder {
         SignedOrder {
             order: Order {
                 owner: Address([owner; 32]),
                 sell_mint: sell,
                 buy_mint: buy,
                 sell_amount: sell_amt,
-                buy_amount:  buy_amt,
+                buy_amount: buy_amt,
                 valid_to,
                 nonce: 0,
                 kind: OrderKind::Sell,
@@ -328,14 +398,19 @@ mod tests {
         // Alice sells 100 A wants ≥150 B (limit 1.5 B/A)
         let alice = order(1, a, b, 100, 150, i64::MAX);
         // Bob sells 200 B wants ≥100 A (limit 0.5 A/B = 2.0 B/A)
-        let bob   = order(2, b, a, 200, 100, i64::MAX);
+        let bob = order(2, b, a, 200, 100, i64::MAX);
 
         let m = Matcher::default();
         let s = m.match_batch(BatchId::new(), Address::zero(), &[alice, bob]);
 
         assert_eq!(s.trades.len(), 2);
         // both orders should be (mostly) satisfied
-        let total_a_sold: u64 = s.trades.iter().filter(|t| t.executed_sell > 0).map(|t| t.executed_sell).sum();
+        let total_a_sold: u64 = s
+            .trades
+            .iter()
+            .filter(|t| t.executed_sell > 0)
+            .map(|t| t.executed_sell)
+            .sum();
         assert!(total_a_sold > 0);
         assert!(s.score > 0, "expected positive surplus from CoW");
     }
@@ -347,7 +422,7 @@ mod tests {
         // Alice wants 1000 B for 100 A (limit 10 B/A) — very expensive
         let alice = order(1, a, b, 100, 1000, i64::MAX);
         // Bob offers 100 B for 100 A (limit 1 A/B = 1 B/A) — far below ask
-        let bob   = order(2, b, a, 100, 100, i64::MAX);
+        let bob = order(2, b, a, 100, 100, i64::MAX);
 
         let m = Matcher::default();
         let s = m.match_batch(BatchId::new(), Address::zero(), &[alice, bob]);
@@ -369,12 +444,17 @@ mod tests {
             orders.push(order(i, a, b, s, bu, i64::MAX));
             orders.push(order(255 - i, b, a, s, bu, i64::MAX));
         }
-        let par = Matcher::new(MatcherConfig { parallel: true })
-            .match_batch(BatchId::new(), Address::zero(), &orders);
-        let ser = Matcher::new(MatcherConfig { parallel: false })
-            .match_batch(BatchId::new(), Address::zero(), &orders);
+        let par = Matcher::new(MatcherConfig { parallel: true }).match_batch(
+            BatchId::new(),
+            Address::zero(),
+            &orders,
+        );
+        let ser = Matcher::new(MatcherConfig { parallel: false }).match_batch(
+            BatchId::new(),
+            Address::zero(),
+            &orders,
+        );
         assert_eq!(par.trades.len(), ser.trades.len());
         assert_eq!(par.score, ser.score);
     }
 }
-

@@ -17,12 +17,18 @@ pub struct State {
 }
 
 /// `GET /healthz`
-pub async fn healthz() -> impl Responder { HttpResponse::Ok().body("ok") }
+pub async fn healthz() -> impl Responder {
+    HttpResponse::Ok().body("ok")
+}
 
 /// `GET /readyz` — checks the repository can serve a list_open call cheaply.
 #[instrument(skip(state))]
 pub async fn readyz(state: web::Data<State>) -> Result<HttpResponse, ApiError> {
-    state.repo.list_open(None).await.map_err(|e| ApiError(e.into()))?;
+    state
+        .repo
+        .list_open(None)
+        .await
+        .map_err(|e| ApiError(e.into()))?;
     Ok(HttpResponse::Ok().body("ready"))
 }
 
@@ -53,10 +59,17 @@ pub async fn submit_order(
     signed.verify().map_err(ApiError)?;
 
     // 3. Persist.
-    let rec = state.repo.insert(signed).await.map_err(|e| ApiError(e.into()))?;
+    let rec = state
+        .repo
+        .insert(signed)
+        .await
+        .map_err(|e| ApiError(e.into()))?;
     metrics::counter!("oxdex_orders_submitted_total").increment(1);
 
-    Ok(HttpResponse::Created().json(SubmitResponse { id: rec.id, status: rec.status.as_str() }))
+    Ok(HttpResponse::Created().json(SubmitResponse {
+        id: rec.id,
+        status: rec.status.as_str(),
+    }))
 }
 
 /// `GET /v1/orders/{id}` — id is hex.
@@ -91,10 +104,17 @@ pub async fn list_orders(
             Some((s, b))
         }
         (None, None) => None,
-        _ => return Err(ApiError(oxdex_types::OxDexError::InvalidOrder(
-            "must specify both sell_mint and buy_mint, or neither".into()))),
+        _ => {
+            return Err(ApiError(oxdex_types::OxDexError::InvalidOrder(
+                "must specify both sell_mint and buy_mint, or neither".into(),
+            )))
+        }
     };
-    let recs = state.repo.list_open(pair).await.map_err(|e| ApiError(e.into()))?;
+    let recs = state
+        .repo
+        .list_open(pair)
+        .await
+        .map_err(|e| ApiError(e.into()))?;
     Ok(HttpResponse::Ok().json(recs))
 }
 
@@ -113,23 +133,41 @@ pub async fn cancel_order(
     req: actix_web::HttpRequest,
 ) -> Result<HttpResponse, ApiError> {
     let id = parse_order_id(&path.into_inner())?;
-    let owner_str = req.headers().get("x-owner")
+    let owner_str = req
+        .headers()
+        .get("x-owner")
         .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| ApiError(oxdex_types::OxDexError::InvalidOrder("missing X-Owner".into())))?;
+        .ok_or_else(|| {
+            ApiError(oxdex_types::OxDexError::InvalidOrder(
+                "missing X-Owner".into(),
+            ))
+        })?;
     let owner: Address = owner_str.parse().map_err(ApiError)?;
-    let ok = state.repo.cancel(&id, &owner).await.map_err(|e| ApiError(e.into()))?;
+    let ok = state
+        .repo
+        .cancel(&id, &owner)
+        .await
+        .map_err(|e| ApiError(e.into()))?;
     if ok {
         metrics::counter!("oxdex_orders_cancelled_total").increment(1);
         Ok(HttpResponse::NoContent().finish())
     } else {
-        Err(ApiError(oxdex_types::OxDexError::Conflict("not cancellable".into())))
+        Err(ApiError(oxdex_types::OxDexError::Conflict(
+            "not cancellable".into(),
+        )))
     }
 }
 
 fn parse_order_id(s: &str) -> Result<OrderId, ApiError> {
-    let bytes = hex::decode(s).map_err(|e| ApiError(oxdex_types::OxDexError::InvalidOrder(format!("bad hex id: {e}"))))?;
+    let bytes = hex::decode(s).map_err(|e| {
+        ApiError(oxdex_types::OxDexError::InvalidOrder(format!(
+            "bad hex id: {e}"
+        )))
+    })?;
     if bytes.len() != 32 {
-        return Err(ApiError(oxdex_types::OxDexError::InvalidOrder("id must be 32 bytes".into())));
+        return Err(ApiError(oxdex_types::OxDexError::InvalidOrder(
+            "id must be 32 bytes".into(),
+        )));
     }
     let mut a = [0u8; 32];
     a.copy_from_slice(&bytes);
@@ -137,6 +175,8 @@ fn parse_order_id(s: &str) -> Result<OrderId, ApiError> {
 }
 
 fn unix_secs() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
-

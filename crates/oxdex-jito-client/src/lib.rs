@@ -75,7 +75,9 @@ impl HttpJitoClient {
     }
 
     /// Default tip configured on this client.
-    pub fn tip_lamports(&self) -> u64 { self.tip_lamports }
+    pub fn tip_lamports(&self) -> u64 {
+        self.tip_lamports
+    }
 }
 
 #[async_trait]
@@ -88,13 +90,18 @@ impl BundleSubmitter for HttpJitoClient {
             "method": "sendBundle",
             "params": [ bundle.transactions ],
         });
-        let resp = self.http.post(&self.url)
+        let resp = self
+            .http
+            .post(&self.url)
             .json(&body)
             .send()
             .await
             .map_err(|e| BundleError::Transport(e.to_string()))?;
         let status = resp.status();
-        let txt = resp.text().await.map_err(|e| BundleError::Transport(e.to_string()))?;
+        let txt = resp
+            .text()
+            .await
+            .map_err(|e| BundleError::Transport(e.to_string()))?;
         if !status.is_success() {
             return Err(BundleError::Server(format!("{status}: {txt}")));
         }
@@ -103,7 +110,10 @@ impl BundleSubmitter for HttpJitoClient {
         if let Some(err) = v.get("error") {
             return Err(BundleError::Server(err.to_string()));
         }
-        Ok(v.get("result").and_then(|r| r.as_str()).unwrap_or("unknown").to_string())
+        Ok(v.get("result")
+            .and_then(|r| r.as_str())
+            .unwrap_or("unknown")
+            .to_string())
     }
 }
 
@@ -117,9 +127,13 @@ pub struct InMemoryJitoClient {
 
 impl InMemoryJitoClient {
     /// New empty client.
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
     /// Snapshot of all submitted bundles so far.
-    pub fn submitted(&self) -> Vec<Bundle> { self.inner.lock().clone() }
+    pub fn submitted(&self) -> Vec<Bundle> {
+        self.inner.lock().clone()
+    }
 }
 
 #[async_trait]
@@ -147,13 +161,15 @@ mod tests {
     #[tokio::test]
     async fn in_memory_submitter_records_bundle() {
         let c = InMemoryJitoClient::new();
-        let id = c.submit(Bundle {
-            transactions: vec!["AAA".into()],
-            tip_lamports: 1000,
-            trace_id: "t1".into(),
-        }).await.unwrap();
+        let id = c
+            .submit(Bundle {
+                transactions: vec!["AAA".into()],
+                tip_lamports: 1000,
+                trace_id: "t1".into(),
+            })
+            .await
+            .unwrap();
         assert_eq!(id, "inmem-0");
         assert_eq!(c.submitted().len(), 1);
     }
 }
-

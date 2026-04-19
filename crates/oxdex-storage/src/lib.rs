@@ -13,4 +13,3 @@ pub mod postgres;
 pub mod repository;
 
 pub use repository::{OrderRecord, OrderRepository, RepoError, RepoResult};
-

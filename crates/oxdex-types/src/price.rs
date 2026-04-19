@@ -44,7 +44,11 @@ impl Price {
     }
 }
 
-impl PartialOrd for Price { fn partial_cmp(&self, o: &Self) -> Option<Ordering> { Some(self.cmp(o)) } }
+impl PartialOrd for Price {
+    fn partial_cmp(&self, o: &Self) -> Option<Ordering> {
+        Some(self.cmp(o))
+    }
+}
 impl Ord for Price {
     fn cmp(&self, o: &Self) -> Ordering {
         // exact rational compare, saturating to avoid panics on huge values
@@ -59,7 +63,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rejects_zero_den() { assert!(Price::new(1, 0).is_err()); }
+    fn rejects_zero_den() {
+        assert!(Price::new(1, 0).is_err());
+    }
 
     #[test]
     fn applies_floor() {
@@ -76,4 +82,3 @@ mod tests {
         assert!(a.ge_rational(&b));
     }
 }
-

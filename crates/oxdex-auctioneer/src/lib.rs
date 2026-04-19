@@ -57,7 +57,12 @@ impl Auctioneer {
         solvers: Vec<Arc<dyn Solver>>,
         sink: Arc<dyn SolutionSink>,
     ) -> Self {
-        Self { cfg, repo, solvers, sink }
+        Self {
+            cfg,
+            repo,
+            solvers,
+            sink,
+        }
     }
 
     /// Run forever, sealing one batch per `batch_interval_ms`.
@@ -65,7 +70,10 @@ impl Auctioneer {
     pub async fn run(self, mut shutdown: mpsc::Receiver<()>) {
         let mut ticker = tokio::time::interval(Duration::from_millis(self.cfg.batch_interval_ms));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        info!(interval_ms = self.cfg.batch_interval_ms, "auctioneer started");
+        info!(
+            interval_ms = self.cfg.batch_interval_ms,
+            "auctioneer started"
+        );
 
         loop {
             tokio::select! {
@@ -82,15 +90,26 @@ impl Auctioneer {
     #[instrument(skip(self))]
     async fn run_one_auction(&self) -> Result<(), oxdex_types::OxDexError> {
         if self.solvers.len() < self.cfg.min_solvers {
-            debug!(have = self.solvers.len(), need = self.cfg.min_solvers,
-                   "skipping auction: not enough solvers");
+            debug!(
+                have = self.solvers.len(),
+                need = self.cfg.min_solvers,
+                "skipping auction: not enough solvers"
+            );
             return Ok(());
         }
 
         // 1. Seal the batch.
         let now = unix_secs();
-        let _expired = self.repo.expire_due(now).await.map_err(Into::<oxdex_types::OxDexError>::into)?;
-        let open = self.repo.list_open(None).await.map_err(Into::<oxdex_types::OxDexError>::into)?;
+        let _expired = self
+            .repo
+            .expire_due(now)
+            .await
+            .map_err(Into::<oxdex_types::OxDexError>::into)?;
+        let open = self
+            .repo
+            .list_open(None)
+            .await
+            .map_err(Into::<oxdex_types::OxDexError>::into)?;
         if open.is_empty() {
             debug!("no open orders");
             return Ok(());
@@ -105,7 +124,9 @@ impl Auctioneer {
 
         // 2. Race solvers in parallel, time-boxed.
         let deadline = Duration::from_millis(self.cfg.solver_timeout_ms);
-        let mut fut: FuturesUnordered<_> = self.solvers.iter()
+        let mut fut: FuturesUnordered<_> = self
+            .solvers
+            .iter()
             .map(|s| {
                 let s = Arc::clone(s);
                 let b = batch.clone();
@@ -134,10 +155,16 @@ impl Auctioneer {
 
         // 4. Mark touched orders as Auctioned.
         for t in &winner.trades {
-            if let Err(e) = self.repo.update_status(
-                &t.order_id, OrderStatus::Auctioned,
-                Some(t.executed_sell), Some(t.executed_buy),
-            ).await {
+            if let Err(e) = self
+                .repo
+                .update_status(
+                    &t.order_id,
+                    OrderStatus::Auctioned,
+                    Some(t.executed_sell),
+                    Some(t.executed_buy),
+                )
+                .await
+            {
                 warn!(error = %e, "failed to mark order auctioned");
             }
         }
@@ -150,7 +177,10 @@ impl Auctioneer {
 }
 
 fn unix_secs() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -164,28 +194,45 @@ mod tests {
     struct CaptureSink(Mutex<Vec<Solution>>);
     #[async_trait::async_trait]
     impl SolutionSink for CaptureSink {
-        async fn deliver(&self, s: Solution) { self.0.lock().push(s); }
+        async fn deliver(&self, s: Solution) {
+            self.0.lock().push(s);
+        }
     }
 
     fn order(owner: u8, sell: Address, buy: Address, sa: u64, ba: u64) -> SignedOrder {
-        SignedOrder { order: Order {
-            owner: Address([owner; 32]), sell_mint: sell, buy_mint: buy,
-            sell_amount: sa, buy_amount: ba, valid_to: i64::MAX, nonce: 0,
-            kind: OrderKind::Sell, partial_fill: true, receiver: Address([owner; 32]),
-        }, signature: [0u8; 64] }
+        SignedOrder {
+            order: Order {
+                owner: Address([owner; 32]),
+                sell_mint: sell,
+                buy_mint: buy,
+                sell_amount: sa,
+                buy_amount: ba,
+                valid_to: i64::MAX,
+                nonce: 0,
+                kind: OrderKind::Sell,
+                partial_fill: true,
+                receiver: Address([owner; 32]),
+            },
+            signature: [0u8; 64],
+        }
     }
 
     #[tokio::test]
     async fn end_to_end_round() {
         let repo: Arc<dyn OrderRepository> = Arc::new(InMemoryOrderRepository::new());
-        let a = Address([1u8; 32]); let b = Address([2u8; 32]);
+        let a = Address([1u8; 32]);
+        let b = Address([2u8; 32]);
         repo.insert(order(1, a, b, 100, 150)).await.unwrap();
         repo.insert(order(2, b, a, 200, 100)).await.unwrap();
 
         let sink = Arc::new(CaptureSink(Mutex::new(vec![])));
         let solvers: Vec<Arc<dyn Solver>> = vec![Arc::new(ReferenceSolver::new(Address::zero()))];
 
-        let cfg = AuctionSettings { batch_interval_ms: 50, solver_timeout_ms: 200, min_solvers: 1 };
+        let cfg = AuctionSettings {
+            batch_interval_ms: 50,
+            solver_timeout_ms: 200,
+            min_solvers: 1,
+        };
         let auc = Auctioneer::new(cfg, repo.clone(), solvers, sink.clone());
         auc.run_one_auction().await.unwrap();
 

@@ -56,16 +56,16 @@ impl OxDexError {
     /// Stable string code suitable for HTTP error bodies / logs / metrics.
     pub fn code(&self) -> &'static str {
         match self {
-            Self::InvalidAddress(_)  => "invalid_address",
-            Self::InvalidOrder(_)    => "invalid_order",
-            Self::BadSignature(_)    => "bad_signature",
-            Self::NotFound(_)        => "not_found",
-            Self::Conflict(_)        => "conflict",
+            Self::InvalidAddress(_) => "invalid_address",
+            Self::InvalidOrder(_) => "invalid_order",
+            Self::BadSignature(_) => "bad_signature",
+            Self::NotFound(_) => "not_found",
+            Self::Conflict(_) => "conflict",
             Self::InvalidSolution(_) => "invalid_solution",
-            Self::Storage(_)         => "storage_error",
-            Self::Network(_)         => "network_error",
-            Self::Config(_)          => "config_error",
-            Self::Internal(_)        => "internal_error",
+            Self::Storage(_) => "storage_error",
+            Self::Network(_) => "network_error",
+            Self::Config(_) => "config_error",
+            Self::Internal(_) => "internal_error",
         }
     }
 
@@ -74,4 +74,3 @@ impl OxDexError {
         matches!(self, Self::Storage(_) | Self::Network(_))
     }
 }
-

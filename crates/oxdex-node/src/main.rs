@@ -17,9 +17,13 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use oxdex_auctioneer::{Auctioneer, LoggingSink, SolutionSink};
 use oxdex_config::Settings;
 use oxdex_intent_pool::{build_app, AppState};
-use oxdex_jito_client::{encode_solution_as_placeholder_tx, Bundle, BundleSubmitter, InMemoryJitoClient};
+use oxdex_jito_client::{
+    encode_solution_as_placeholder_tx, Bundle, BundleSubmitter, InMemoryJitoClient,
+};
 use oxdex_solver::{ReferenceSolver, Solver};
-use oxdex_storage::{memory::InMemoryOrderRepository, postgres::PgOrderRepository, OrderRepository};
+use oxdex_storage::{
+    memory::InMemoryOrderRepository, postgres::PgOrderRepository, OrderRepository,
+};
 use oxdex_types::{Address, Solution};
 
 /// Settlement sink that wraps a [`BundleSubmitter`].
@@ -57,7 +61,9 @@ async fn main() -> anyhow::Result<()> {
         &settings.database.url,
         settings.database.min_connections,
         settings.database.max_connections,
-    ).await {
+    )
+    .await
+    {
         Ok(pg) => {
             if let Err(e) = pg.migrate().await {
                 error!(error = %e, "migrations failed; aborting");
@@ -89,12 +95,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Auctioneer
-    let auc = Auctioneer::new(
-        settings.auction.clone(),
-        repo.clone(),
-        solvers,
-        sink,
-    );
+    let auc = Auctioneer::new(settings.auction.clone(), repo.clone(), solvers, sink);
     let (shutdown_tx, shutdown_rx) = mpsc::channel(1);
     let auc_handle = tokio::spawn(auc.run(shutdown_rx));
 
@@ -126,7 +127,9 @@ fn init_tracing() {
 fn install_metrics() -> anyhow::Result<()> {
     use metrics_exporter_prometheus::PrometheusBuilder;
     let port: u16 = std::env::var("OXDEX_METRICS_PORT")
-        .ok().and_then(|s| s.parse().ok()).unwrap_or(9100);
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(9100);
     PrometheusBuilder::new()
         .with_http_listener(([0, 0, 0, 0], port))
         .install()
@@ -134,4 +137,3 @@ fn install_metrics() -> anyhow::Result<()> {
     info!(metrics_port = port, "Prometheus exporter listening");
     Ok(())
 }
-

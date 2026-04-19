@@ -22,11 +22,14 @@ struct JitoSink {
 impl SolutionSink for JitoSink {
     async fn deliver(&self, sol: Solution) {
         let tx = oxdex_jito_client::encode_solution_as_placeholder_tx(&sol);
-        let _ = self.submitter.submit(Bundle {
-            transactions: vec![tx],
-            tip_lamports: 1_000,
-            trace_id: sol.batch_id.to_string(),
-        }).await;
+        let _ = self
+            .submitter
+            .submit(Bundle {
+                transactions: vec![tx],
+                tip_lamports: 1_000,
+                trace_id: sol.batch_id.to_string(),
+            })
+            .await;
     }
 }
 
@@ -35,14 +38,22 @@ fn signed(sell: Address, buy: Address, sa: u64, ba: u64) -> SignedOrder {
     let pk = sk.verifying_key();
     let owner = Address(pk.to_bytes());
     let order = Order {
-        owner, sell_mint: sell, buy_mint: buy,
-        sell_amount: sa, buy_amount: ba,
-        valid_to: i64::MAX, nonce: 1,
-        kind: OrderKind::Sell, partial_fill: true,
+        owner,
+        sell_mint: sell,
+        buy_mint: buy,
+        sell_amount: sa,
+        buy_amount: ba,
+        valid_to: i64::MAX,
+        nonce: 1,
+        kind: OrderKind::Sell,
+        partial_fill: true,
         receiver: owner,
     };
     let sig = sk.sign(&order.id().0);
-    SignedOrder { order, signature: sig.to_bytes() }
+    SignedOrder {
+        order,
+        signature: sig.to_bytes(),
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -56,10 +67,16 @@ async fn round_trip_submit_to_bundle() {
     repo.insert(signed(b, a, 200, 100)).await.unwrap();
 
     let jito = Arc::new(InMemoryJitoClient::new());
-    let sink = Arc::new(JitoSink { submitter: jito.clone() });
+    let sink = Arc::new(JitoSink {
+        submitter: jito.clone(),
+    });
     let solvers: Vec<Arc<dyn Solver>> = vec![Arc::new(ReferenceSolver::new(Address::zero()))];
 
-    let cfg = AuctionSettings { batch_interval_ms: 50, solver_timeout_ms: 200, min_solvers: 1 };
+    let cfg = AuctionSettings {
+        batch_interval_ms: 50,
+        solver_timeout_ms: 200,
+        min_solvers: 1,
+    };
     let auc = Auctioneer::new(cfg, repo.clone(), solvers, sink);
 
     // Run for ~250ms then verify a bundle landed.
@@ -72,4 +89,3 @@ async fn round_trip_submit_to_bundle() {
     let bundles = jito.submitted();
     assert!(!bundles.is_empty(), "expected at least one bundle");
 }
-

@@ -11,13 +11,21 @@ pub struct BatchId(pub Uuid);
 
 impl BatchId {
     /// Generate a new random v4 id.
-    pub fn new() -> Self { Self(Uuid::new_v4()) }
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
 }
 
-impl Default for BatchId { fn default() -> Self { Self::new() } }
+impl Default for BatchId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl std::fmt::Display for BatchId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { self.0.fmt(f) }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
 }
 
 /// A batch of orders presented to solvers as a single auction instance.
@@ -33,8 +41,11 @@ pub struct Batch {
 
 impl Batch {
     /// Total number of orders.
-    pub fn len(&self) -> usize { self.orders.len() }
+    pub fn len(&self) -> usize {
+        self.orders.len()
+    }
     /// Whether the batch is empty.
-    pub fn is_empty(&self) -> bool { self.orders.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.orders.is_empty()
+    }
 }
-

@@ -45,7 +45,9 @@ pub struct Solution {
 impl Solution {
     /// Look up the clearing price for `mint`.
     pub fn price_of(&self, mint: &Address) -> Option<&Price> {
-        self.clearing_prices.iter().find(|c| &c.mint == mint).map(|c| &c.price)
+        self.clearing_prices
+            .iter()
+            .find(|c| &c.mint == mint)
+            .map(|c| &c.price)
     }
 }
-

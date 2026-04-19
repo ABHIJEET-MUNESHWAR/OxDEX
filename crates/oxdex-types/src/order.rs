@@ -15,7 +15,9 @@ pub struct OrderId(pub [u8; 32]);
 
 impl OrderId {
     /// Lower-case hex form, useful for logs / DB keys.
-    pub fn to_hex(&self) -> String { hex::encode(self.0) }
+    pub fn to_hex(&self) -> String {
+        hex::encode(self.0)
+    }
 }
 
 impl std::fmt::Display for OrderId {
@@ -56,23 +58,23 @@ impl OrderStatus {
     /// Stable string code used as the Postgres column value.
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Open             => "open",
-            Self::Auctioned        => "auctioned",
-            Self::Filled           => "filled",
-            Self::PartiallyFilled  => "partially_filled",
-            Self::Cancelled        => "cancelled",
-            Self::Expired          => "expired",
+            Self::Open => "open",
+            Self::Auctioned => "auctioned",
+            Self::Filled => "filled",
+            Self::PartiallyFilled => "partially_filled",
+            Self::Cancelled => "cancelled",
+            Self::Expired => "expired",
         }
     }
     /// Inverse of [`as_str`].
     pub fn from_db(s: &str) -> Option<Self> {
         Some(match s {
-            "open"             => Self::Open,
-            "auctioned"        => Self::Auctioned,
-            "filled"           => Self::Filled,
+            "open" => Self::Open,
+            "auctioned" => Self::Auctioned,
+            "filled" => Self::Filled,
             "partially_filled" => Self::PartiallyFilled,
-            "cancelled"        => Self::Cancelled,
-            "expired"          => Self::Expired,
+            "cancelled" => Self::Cancelled,
+            "expired" => Self::Expired,
             _ => return None,
         })
     }
@@ -119,7 +121,9 @@ impl Order {
     /// Cheap, side-effect-free semantic checks. Does NOT verify signatures or balances.
     pub fn validate(&self, now_unix_secs: i64) -> Result<()> {
         if self.sell_mint == self.buy_mint {
-            return Err(OxDexError::InvalidOrder("sell and buy mints are equal".into()));
+            return Err(OxDexError::InvalidOrder(
+                "sell and buy mints are equal".into(),
+            ));
         }
         if self.sell_amount == 0 {
             return Err(OxDexError::InvalidOrder("sell_amount must be > 0".into()));
@@ -170,14 +174,16 @@ impl SignedOrder {
 
 /// Helper to (de)serialize `[u8; 64]` as hex (cleaner JSON than serde_bytes default).
 mod serde_bytes_array {
-    use serde::{Deserializer, Serializer, Deserialize};
+    use serde::{Deserialize, Deserializer, Serializer};
     pub fn serialize<S: Serializer>(v: &[u8; 64], s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(&hex::encode(v))
     }
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<[u8; 64], D::Error> {
         let s = String::deserialize(d)?;
         let v = hex::decode(&s).map_err(serde::de::Error::custom)?;
-        if v.len() != 64 { return Err(serde::de::Error::custom("expected 64-byte signature")); }
+        if v.len() != 64 {
+            return Err(serde::de::Error::custom("expected 64-byte signature"));
+        }
         let mut out = [0u8; 64];
         out.copy_from_slice(&v);
         Ok(out)
@@ -233,9 +239,10 @@ mod tests {
         o.owner = Address(pk.to_bytes());
         o.receiver = o.owner;
         let sig = sk.sign(&o.id().0);
-        let signed = SignedOrder { order: o, signature: sig.to_bytes() };
+        let signed = SignedOrder {
+            order: o,
+            signature: sig.to_bytes(),
+        };
         signed.verify().unwrap();
     }
 }
-
-
