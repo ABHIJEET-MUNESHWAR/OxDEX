@@ -11,6 +11,36 @@ on-chain in a single Jito-bundled transaction.
 
 ---
 
+## Table of Contents
+
+- [Architecture](#architecture)
+- [How It Works](#how-it-works)
+  - [0. Process boot (`oxdex-node`)](#0-process-boot-oxdex-node)
+  - [1. Order submission flow — `POST /v1/orders`](#1-order-submission-flow--post-v1orders)
+  - [2. Read flows](#2-read-flows)
+  - [3. Cancellation flow — `DELETE /v1/orders/{id}`](#3-cancellation-flow--delete-v1ordersid)
+  - [4. Auctioneer loop (background task)](#4-auctioneer-loop-background-task)
+  - [5. Matching engine internals](#5-matching-engine-internals)
+  - [6. Settlement / Jito flow](#6-settlement--jito-flow)
+  - [7. End-to-end happy path (one wall-clock cycle)](#7-end-to-end-happy-path-one-wall-clock-cycle)
+  - [8. Failure & recovery semantics at a glance](#8-failure--recovery-semantics-at-a-glance)
+- [Workspace layout](#workspace-layout)
+- [Quick start](#quick-start)
+  - [Prerequisites](#prerequisites)
+  - [Run with PostgreSQL](#run-with-postgresql)
+  - [Run with no Postgres (dev)](#run-with-no-postgres-dev)
+  - [Submit an order](#submit-an-order)
+- [Configuration](#configuration)
+- [Testing](#testing)
+- [Performance characteristics](#performance-characteristics)
+- [Coding-standards self-assessment](#coding-standards-self-assessment)
+  - [Honest gaps & next iterations](#honest-gaps--next-iterations)
+- [OxDEX vs CoW Swap — comparison](#oxdex-vs-cow-swap--comparison)
+- [Postman collection](#postman-collection)
+- [License](#license)
+
+---
+
 ## Architecture
 
 ```
@@ -554,6 +584,20 @@ M-class laptop, 8 cores):
 The tl;dr: **OxDEX inherits CoW's economic model (batch auctions, UCP,
 solver competition, surplus rebate) and gains Solana's structural MEV
 advantages (no mempool, leader-routed bundles) and cost/latency profile.**
+
+---
+
+## Postman collection
+
+A ready-to-import Postman v2.1 collection for the intent-pool HTTP API
+lives at [`postman/OxDEX.postman_collection.json`](postman/OxDEX.postman_collection.json).
+
+Import via Postman → **Import** → **File**. It ships with collection
+variables (`baseUrl`, `orderId`, `owner`, `sellMint`, `buyMint`),
+pre-built requests for `/healthz`, `/readyz`, and the full
+`/v1/orders` CRUD surface, and a templated `SubmitBody` JSON payload.
+Replace the placeholder `signature` (128 hex chars) with one produced
+by your signing client to exercise the happy path.
 
 ---
 
