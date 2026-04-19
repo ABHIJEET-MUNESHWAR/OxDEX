@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "OxDEX Intent Pool API",
-    "description": "Postman collection for the OxDEX intent-pool HTTP API exposed by `oxdex-node`.\n\nDefault base URL is `http://127.0.0.1:8080`. Override via the `baseUrl` collection variable.\n\nNotes on payloads:\n- `Address` fields (owner, sell_mint, buy_mint, receiver) are **base58** strings of a 32-byte Ed25519 public key (Solana style).\n- `signature` is a **128-char hex** string (64 raw bytes) of an Ed25519 signature over the order id.\n- `OrderId` path parameter is the **lower-case hex** of the 32-byte sha256 id (64 chars).\n- `kind` is `\"sell\"` or `\"buy\"`.\n\nThe placeholder values below will NOT pass signature verification — replace them with values produced by your signing client.",
+    "description": "Postman collection for the OxDEX intent-pool HTTP API exposed by `oxdex-node`.\n\nDefault base URL is `http://127.0.0.1:8080`. Override via the `baseUrl` collection variable.\n\nNotes on payloads:\n- `Address` fields (owner, sell_mint, buy_mint, receiver) are **base58** strings of a 32-byte Ed25519 public key (Solana style).\n- `signature` is a **128-char HEX** string (64 raw bytes) of an Ed25519 signature over the order id.\n- `OrderId` path parameter is the **lower-case hex** of the 32-byte sha256 id (64 chars).\n- `kind` is `\"sell\"` or `\"buy\"`.\n\nThe placeholder values below will NOT pass signature verification — replace them with values produced by your signing client.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
