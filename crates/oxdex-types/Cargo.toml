@@ -1,0 +1,24 @@
+[package]
+name = "oxdex-types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared domain types for OxDEX (orders, batches, solutions, errors)."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+bincode = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+hex = { workspace = true }
+bs58 = { workspace = true }
+sha2 = { workspace = true }
+ed25519-dalek = { workspace = true }
+rust_decimal = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+rand = { workspace = true }
+

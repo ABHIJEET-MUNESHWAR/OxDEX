@@ -1,0 +1,29 @@
+[package]
+name = "oxdex-intent-pool"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Actix-Web HTTP API exposing the intent pool."
+
+[dependencies]
+oxdex-types = { path = "../oxdex-types" }
+oxdex-storage = { path = "../oxdex-storage" }
+actix-web = { workspace = true }
+actix-cors = { workspace = true }
+tracing-actix-web = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+metrics = { workspace = true }
+chrono = { workspace = true }
+hex = { workspace = true }
+
+[dev-dependencies]
+actix-rt = { workspace = true }
+tokio = { workspace = true }
+ed25519-dalek = { workspace = true }
+rand = { workspace = true }
+
+

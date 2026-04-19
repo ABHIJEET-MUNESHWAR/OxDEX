@@ -1,0 +1,23 @@
+[package]
+name = "oxdex-matching"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CoW-style coincidence-of-wants matching engine with uniform clearing prices."
+
+[dependencies]
+oxdex-types = { path = "../oxdex-types" }
+rayon = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+criterion = { workspace = true }
+rand = { workspace = true }
+
+[[bench]]
+name = "matching_bench"
+harness = false
+

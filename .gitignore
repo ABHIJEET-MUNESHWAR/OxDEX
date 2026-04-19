@@ -1,0 +1,13 @@
+/target
+**/*.rs.bk
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.idea/
+.vscode/
+/coverage
+*.profraw
+Cargo.lock.bak
+

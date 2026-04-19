@@ -1,0 +1,15 @@
+[package]
+name = "oxdex-config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Strongly-typed runtime configuration for OxDEX."
+
+[dependencies]
+serde = { workspace = true }
+config = { workspace = true }
+dotenvy = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+oxdex-types = { path = "../oxdex-types" }
+

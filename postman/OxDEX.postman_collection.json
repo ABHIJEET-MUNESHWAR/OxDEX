@@ -1,0 +1,105 @@
+{
+  "info": {
+    "name": "OxDEX Intent Pool API",
+    "description": "Postman collection for the OxDEX intent-pool HTTP API exposed by `oxdex-node`.\n\nDefault base URL is `http://127.0.0.1:8080`. Override via the `baseUrl` collection variable.\n\nNotes on payloads:\n- `Address` fields (owner, sell_mint, buy_mint, receiver) are **base58** strings of a 32-byte Ed25519 public key (Solana style).\n- `signature` is a **128-char hex** string (64 raw bytes) of an Ed25519 signature over the order id.\n- `OrderId` path parameter is the **lower-case hex** of the 32-byte sha256 id (64 chars).\n- `kind` is `\"sell\"` or `\"buy\"`.\n\nThe placeholder values below will NOT pass signature verification — replace them with values produced by your signing client.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://127.0.0.1:8080", "type": "string" },
+    { "key": "orderId", "value": "0000000000000000000000000000000000000000000000000000000000000000", "type": "string" },
+    { "key": "owner",   "value": "11111111111111111111111111111111", "type": "string" },
+    { "key": "sellMint","value": "So11111111111111111111111111111111111111112", "type": "string" },
+    { "key": "buyMint", "value": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "GET /healthz",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/healthz", "host": ["{{baseUrl}}"], "path": ["healthz"] },
+            "description": "Liveness probe. Returns `200 ok`."
+          }
+        },
+        {
+          "name": "GET /readyz",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/readyz", "host": ["{{baseUrl}}"], "path": ["readyz"] },
+            "description": "Readiness probe — performs a cheap repository call."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Orders",
+      "item": [
+        {
+          "name": "POST /v1/orders — submit signed order",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"signed\": {\n    \"order\": {\n      \"owner\": \"{{owner}}\",\n      \"sell_mint\": \"{{sellMint}}\",\n      \"buy_mint\": \"{{buyMint}}\",\n      \"sell_amount\": 1000000,\n      \"buy_amount\": 2000000,\n      \"valid_to\": 9999999999,\n      \"nonce\": 1,\n      \"kind\": \"sell\",\n      \"partial_fill\": true,\n      \"receiver\": \"{{owner}}\"\n    },\n    \"signature\": \"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"\n  }\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/v1/orders", "host": ["{{baseUrl}}"], "path": ["v1", "orders"] },
+            "description": "Submit a signed order.\n\n**Body schema** (`SubmitBody`):\n```\n{\n  \"signed\": {\n    \"order\": { ...Order },\n    \"signature\": \"<128 hex chars>\"\n  }\n}\n```\nReturns `201 Created` with `{ id, status }` on success. The dummy signature in this template will fail verification (`400 Bad Request`)."
+          }
+        },
+        {
+          "name": "GET /v1/orders — list open orders",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/orders",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "orders"],
+              "query": [
+                { "key": "sell_mint", "value": "{{sellMint}}", "disabled": true },
+                { "key": "buy_mint",  "value": "{{buyMint}}",  "disabled": true }
+              ]
+            },
+            "description": "List open orders. Optionally filter by a (sell_mint, buy_mint) pair — both query params must be set together."
+          }
+        },
+        {
+          "name": "GET /v1/orders/{id}",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/orders/{{orderId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "orders", "{{orderId}}"]
+            },
+            "description": "Fetch a single order by hex id (64 chars)."
+          }
+        },
+        {
+          "name": "DELETE /v1/orders/{id} — cancel",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "X-Owner", "value": "{{owner}}", "description": "Base58 pubkey of the order owner. Required." }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/orders/{{orderId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "orders", "{{orderId}}"]
+            },
+            "description": "Cancel an order. Requires the `X-Owner` header containing the base58 pubkey of the original signer. Returns `204 No Content` on success."
+          }
+        }
+      ]
+    }
+  ]
+}
+

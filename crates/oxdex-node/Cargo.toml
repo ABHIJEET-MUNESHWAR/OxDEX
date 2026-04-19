@@ -1,0 +1,37 @@
+[package]
+name = "oxdex-node"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "OxDEX node — runs the intent pool API and the auctioneer."
+
+[[bin]]
+name = "oxdex-node"
+path = "src/main.rs"
+
+[dependencies]
+oxdex-types = { path = "../oxdex-types" }
+oxdex-config = { path = "../oxdex-config" }
+oxdex-storage = { path = "../oxdex-storage" }
+oxdex-matching = { path = "../oxdex-matching" }
+oxdex-solver = { path = "../oxdex-solver" }
+oxdex-auctioneer = { path = "../oxdex-auctioneer" }
+oxdex-jito-client = { path = "../oxdex-jito-client" }
+oxdex-intent-pool = { path = "../oxdex-intent-pool" }
+
+tokio = { workspace = true }
+actix-web = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+reqwest = { workspace = true }
+serde_json = { workspace = true }
+ed25519-dalek = { workspace = true }
+rand = { workspace = true }
+

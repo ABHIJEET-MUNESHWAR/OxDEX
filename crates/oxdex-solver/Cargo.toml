@@ -1,0 +1,17 @@
+[package]
+name = "oxdex-solver"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Solver trait + reference solver wrapping the matching engine."
+
+[dependencies]
+oxdex-types = { path = "../oxdex-types" }
+oxdex-matching = { path = "../oxdex-matching" }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+

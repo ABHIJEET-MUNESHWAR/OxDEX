@@ -1,0 +1,23 @@
+[package]
+name = "oxdex-auctioneer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Auctioneer: seals batches, runs the solver competition, picks winners."
+
+[dependencies]
+oxdex-types = { path = "../oxdex-types" }
+oxdex-storage = { path = "../oxdex-storage" }
+oxdex-solver = { path = "../oxdex-solver" }
+oxdex-matching = { path = "../oxdex-matching" }
+oxdex-config = { path = "../oxdex-config" }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+tracing = { workspace = true }
+metrics = { workspace = true }
+parking_lot = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
