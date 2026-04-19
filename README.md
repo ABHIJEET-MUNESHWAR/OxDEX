@@ -30,6 +30,7 @@ on-chain in a single Jito-bundled transaction.
   - [Run with PostgreSQL](#run-with-postgresql)
   - [Run with no Postgres (dev)](#run-with-no-postgres-dev)
   - [Submit an order](#submit-an-order)
+- [Docker](#docker)
 - [Configuration](#configuration)
 - [Testing](#testing)
 - [Performance characteristics](#performance-characteristics)
@@ -467,6 +468,43 @@ curl -sS -X POST http://localhost:8080/v1/orders \
   -H 'content-type: application/json' \
   -d '{ "signed": { ...SignedOrder JSON... } }'
 ```
+
+---
+
+## Docker
+
+A multi-stage [`Dockerfile`](Dockerfile) and a
+[`docker-compose.yml`](docker-compose.yml) ship with the repo. The
+image is built with [`cargo-chef`](https://github.com/LukeMathWalker/cargo-chef)
+so the (slow) dependency layer is cached across rebuilds, then copied
+into a `debian:bookworm-slim` runtime as a non-root user with
+`tini` as PID 1 (clean SIGTERM → cooperative auctioneer + Actix
+shutdown wired in `main.rs`).
+
+```bash
+# Build & run the full stack (postgres + migrations + node)
+docker compose up --build
+
+# API:        http://localhost:8080
+# Metrics:    http://localhost:9100/metrics
+# Postgres:   localhost:5432  (user/pass/db: oxdex/oxdex/oxdex)
+```
+
+The compose file runs migrations as a one-shot `sqlx-cli` job that
+`oxdex-node` waits on (`service_completed_successfully`) before
+starting, and gates the node on Postgres's `pg_isready` healthcheck.
+
+Build the image standalone:
+
+```bash
+docker build -t oxdex-node:local .
+docker run --rm -p 8080:8080 -p 9100:9100 \
+  -e OXDEX__DATABASE__URL=postgres://user:pass@host:5432/db \
+  oxdex-node:local
+```
+
+All `OXDEX__*` env vars from [Configuration](#configuration) work
+inside the container.
 
 ---
 

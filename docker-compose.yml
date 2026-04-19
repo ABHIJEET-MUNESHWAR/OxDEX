@@ -1,0 +1,77 @@
+# Local development stack:
+#   docker compose up --build
+#
+# Brings up:
+#   * postgres   — backing store for the intent pool
+#   * migrate    — one-shot job that runs sqlx migrations against postgres
+#   * oxdex-node — the API + auctioneer, depends on a healthy postgres
+#
+# Endpoints:
+#   http://localhost:8080/healthz   liveness
+#   http://localhost:8080/readyz    readiness (proves DB connectivity)
+#   http://localhost:8080/v1/orders order CRUD
+#   http://localhost:9100/metrics   Prometheus exporter
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: oxdex
+      POSTGRES_PASSWORD: oxdex
+      POSTGRES_DB: oxdex
+    ports:
+      - "5432:5432"
+    volumes:
+      - oxdex_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oxdex -d oxdex"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    image: ghcr.io/launchbadge/sqlx-cli:0.7.4
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://oxdex:oxdex@postgres:5432/oxdex
+    volumes:
+      - ./crates/oxdex-storage/migrations:/migrations:ro
+    command: ["migrate", "run", "--source", "/migrations"]
+    restart: "no"
+
+  oxdex-node:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: oxdex-node:dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      RUST_LOG: info
+      OXDEX__SERVER__BIND: 0.0.0.0:8080
+      OXDEX__DATABASE__URL: postgres://oxdex:oxdex@postgres:5432/oxdex
+      OXDEX__DATABASE__MIN_CONNECTIONS: "1"
+      OXDEX__DATABASE__MAX_CONNECTIONS: "10"
+      OXDEX__AUCTION__BATCH_INTERVAL_MS: "400"
+      OXDEX__AUCTION__SOLVER_TIMEOUT_MS: "200"
+      OXDEX__AUCTION__MIN_SOLVERS: "1"
+      OXDEX_METRICS_PORT: "9100"
+    ports:
+      - "8080:8080"   # HTTP API
+      - "9100:9100"   # Prometheus
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  oxdex_pg:
+

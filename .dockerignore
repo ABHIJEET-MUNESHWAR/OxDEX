@@ -1,0 +1,26 @@
+# Keep the build context tiny and cache-friendly.
+target/
+**/target/
+.git/
+.github/
+.idea/
+.vscode/
+*.log
+*.tmp
+
+# Build artifacts / local-only files
+.env
+.env.*
+!.env.example
+docker-compose.override.yml
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+
+# Docs and assets that don't affect the binary
+README.md
+*.md
+postman/
+programs/
+
