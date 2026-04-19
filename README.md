@@ -57,6 +57,325 @@ separately with the Solana SBF toolchain.
 
 ---
 
+## How It Works
+
+This section documents every flow end-to-end: the data each component owns,
+the exact request/response shape on the wire, and the sequence of internal
+calls triggered for each event. File and line references point at the
+canonical implementation if you want to read along.
+
+### 0. Process boot (`oxdex-node`)
+
+[`crates/oxdex-node/src/main.rs`](crates/oxdex-node/src/main.rs) is the
+single binary entry point. On `cargo run -p oxdex-node` it executes, in
+order:
+
+1. **Tracing.** `init_tracing()` installs a `tracing_subscriber` with
+   `EnvFilter` (defaults to `info`; override with `RUST_LOG`).
+2. **Settings.** `Settings::load()` (from `oxdex-config`) layers
+   `config/default.toml` → `config/${RUN_MODE}.toml` → environment
+   variables prefixed `OXDEX__` (double underscore = section separator).
+3. **Metrics.** `install_metrics()` starts a Prometheus HTTP exporter on
+   `0.0.0.0:OXDEX_METRICS_PORT` (default `9100`). Every counter /
+   histogram you see in this doc (`oxdex_orders_submitted_total`,
+   `oxdex_auctioneer_batches_total`, …) is scraped from there.
+4. **Storage.** `PgOrderRepository::connect(url, min, max)` is attempted
+   first. On success it runs migrations
+   (`crates/oxdex-storage/migrations/20260101000000_init.sql`); on
+   failure it logs a warning and falls back to
+   `InMemoryOrderRepository` (sharded `DashMap`). Either way the result
+   is wrapped as `Arc<dyn OrderRepository>` and shared with both the
+   API and the auctioneer.
+5. **Solvers.** A `Vec<Arc<dyn Solver>>` is constructed; ships with one
+   `ReferenceSolver` (pure CoW matcher). Adding more is a `vec![…]`
+   change.
+6. **Settlement sink.** A `JitoSink` wrapping `InMemoryJitoClient`
+   (or `HttpJitoClient` in production) is built. If the env var
+   `OXDEX_SETTLEMENT_LOGGING_ONLY` is set, the sink is replaced with
+   `LoggingSink` (no submission, only `tracing::info!`).
+7. **Auctioneer task.** `Auctioneer::new(cfg, repo, solvers, sink)` is
+   `tokio::spawn`-ed with an `mpsc::channel(1)` shutdown handle.
+8. **HTTP server.** `build_app(state, bind, workers).await` runs Actix
+   in the foreground. When it returns (Ctrl+C / SIGTERM via Actix's
+   built-in handling), `shutdown_tx.send(()).await` cooperatively stops
+   the auctioneer, then `auc_handle.await` joins it.
+
+The single shared `Arc<dyn OrderRepository>` is the *only* state
+coupling between the API and the auctioneer — there is no in-memory
+queue or message bus.
+
+### 1. Order submission flow — `POST /v1/orders`
+
+Routed in [`crates/oxdex-intent-pool/src/app.rs`](crates/oxdex-intent-pool/src/app.rs)
+to `handlers::submit_order`
+([`handlers.rs`](crates/oxdex-intent-pool/src/handlers.rs)).
+
+**Wire format** (`SubmitBody`):
+
+```json
+{
+  "signed": {
+    "order": {
+      "owner":        "<base58 32-byte pubkey>",
+      "sell_mint":    "<base58 32-byte pubkey>",
+      "buy_mint":     "<base58 32-byte pubkey>",
+      "sell_amount":  1000000,
+      "buy_amount":   2000000,
+      "valid_to":     9999999999,
+      "nonce":        1,
+      "kind":         "sell",
+      "partial_fill": true,
+      "receiver":     "<base58 32-byte pubkey>"
+    },
+    "signature": "<128 hex chars = 64-byte Ed25519 sig over OrderId bytes>"
+  }
+}
+```
+
+Internal pipeline, in strict order (early-exit on the first error):
+
+1. **Deserialize** via `serde_json` into `SignedOrder` (defined in
+   [`crates/oxdex-types/src/order.rs`](crates/oxdex-types/src/order.rs)).
+   Address fields decode from base58; signature decodes from hex.
+2. **`order.validate(now_unix_secs)`** — pure synchronous semantic
+   checks:
+   * `sell_mint != buy_mint`
+   * `sell_amount > 0`
+   * `buy_amount > 0`
+   * `valid_to > now`
+   On failure → `OxDexError::InvalidOrder` → `ApiError` → HTTP `400`.
+3. **`signed.verify()`** — Ed25519 signature check. The owner's 32-byte
+   address is interpreted as the public key; the signature is verified
+   over `order.id().0` (the 32-byte sha256 of canonical `bincode(order)`
+   prefixed with the domain tag `b"oxdex/order/v1"`). Failure → HTTP
+   `400` (`OxDexError::BadSignature`).
+4. **`repo.insert(signed)`** — persists. The `OrderRepository` trait
+   ([`crates/oxdex-storage/src/repository.rs`](crates/oxdex-storage/src/repository.rs))
+   is implemented twice:
+   * `PgOrderRepository` — `INSERT INTO orders (...) ON CONFLICT (id)
+     DO NOTHING RETURNING ...`. Idempotent: re-submitting the same
+     `OrderId` returns the existing record without error.
+   * `InMemoryOrderRepository` — `DashMap<OrderId, OrderRecord>::entry().or_insert_with(...)`.
+   Returns an `OrderRecord { id, status: Open, signed, created_at,
+   executed_sell, executed_buy }`.
+5. **Metric.** `metrics::counter!("oxdex_orders_submitted_total").increment(1)`.
+6. **Response.** HTTP `201 Created`, body
+   `{ "id": "<hex>", "status": "open" }`.
+
+Failure mapping lives in
+[`crates/oxdex-intent-pool/src/errors.rs`](crates/oxdex-intent-pool/src/errors.rs):
+`InvalidOrder | InvalidAddress | BadSignature → 400`,
+`Conflict → 409`, `NotFound → 404`, anything else → `500`.
+
+### 2. Read flows
+
+* **`GET /v1/orders`** (`list_orders`) — accepts optional `sell_mint`
+  and `buy_mint` query params; both must be set together (otherwise
+  `400`). Calls `repo.list_open(pair)`. The Postgres impl uses a
+  partial index `WHERE status = 'open'` so the scan is cheap; the
+  in-memory impl iterates the `DashMap` and filters.
+* **`GET /v1/orders/{id}`** (`get_order`) — `parse_order_id` decodes a
+  64-char hex string into `OrderId([u8; 32])`, then `repo.get(&id)`.
+  Returns the full `OrderRecord` (including current status &
+  cumulative `executed_sell` / `executed_buy`).
+* **`GET /healthz`** — returns `200 ok` unconditionally.
+* **`GET /readyz`** — calls `repo.list_open(None)` once; if it succeeds
+  the service is "ready" (proves DB connectivity).
+
+### 3. Cancellation flow — `DELETE /v1/orders/{id}`
+
+1. Parse `id` from the path (hex, 32 bytes).
+2. Read the `X-Owner` header. If missing → `400 InvalidOrder("missing
+   X-Owner")`. The header must be the **base58** pubkey of the original
+   signer.
+3. Parse it into `Address`. Bad base58 / wrong length → `400`.
+4. `repo.cancel(&id, &owner)` — atomic `UPDATE orders SET status =
+   'cancelled' WHERE id = $1 AND owner = $2 AND status = 'open'`. The
+   owner check is part of the `WHERE` clause, so there is no
+   read-modify-write race; a third party with the id but not the key
+   cannot cancel.
+5. Returns `bool`:
+   * `true`  → `204 No Content`, increments
+     `oxdex_orders_cancelled_total`.
+   * `false` → `409 Conflict` (`"not cancellable"` — already
+     auctioned, filled, expired, or owner mismatch).
+
+### 4. Auctioneer loop (background task)
+
+[`crates/oxdex-auctioneer/src/lib.rs`](crates/oxdex-auctioneer/src/lib.rs).
+A single long-lived `tokio` task. Tick interval is
+`auction.batch_interval_ms` (default a few hundred ms; configurable).
+
+```text
+loop {
+    select! {
+        _ = shutdown.recv() => break,
+        _ = ticker.tick()   => run_one_auction().await
+    }
+}
+```
+
+`MissedTickBehavior::Delay` ensures we do not spin on a back-pressured
+tick after a slow round.
+
+`run_one_auction()` performs five strictly ordered steps:
+
+1. **Solver-count gate.** If `solvers.len() < cfg.min_solvers`, skip
+   silently. Prevents shipping settlements with too little competition.
+2. **Expiry sweep + seal.**
+   * `repo.expire_due(now)` — single `UPDATE … WHERE status='open'
+     AND valid_to <= $1` flips stale orders to `Expired`.
+   * `repo.list_open(None)` — fetch the current open book.
+   * Build `Batch { id: BatchId::new(), sealed_at: now, orders }`.
+     `BatchId` is a fresh ULID-style 16-byte id; this is the
+     content-free batch handle that flows through the rest of the
+     round.
+   * Increment `oxdex_auctioneer_batches_total`.
+3. **Solver race.** A `FuturesUnordered` is built with one future per
+   solver:
+   ```text
+   for s in solvers { (s.address(), s.solve(&batch, deadline).await) }
+   ```
+   Each `Solver::solve` (see
+   [`crates/oxdex-solver/src/lib.rs`](crates/oxdex-solver/src/lib.rs))
+   wraps `tokio::time::timeout(deadline, spawn_blocking(matcher.match_batch))`,
+   so:
+   * CPU-bound matching never stalls the reactor.
+   * A slow solver is bounded by `cfg.solver_timeout_ms` and reported
+     as an error rather than blocking the round.
+
+   The auctioneer awaits results as they complete and keeps the one
+   with the highest `score` (`u128` total surplus). Errored solvers
+   are logged and skipped.
+4. **Mark winners auctioned.** For each `TradeExecution` in the
+   winning solution, call
+   `repo.update_status(order_id, Auctioned, executed_sell, executed_buy)`.
+   This prevents the same orders from being re-batched next tick.
+   Failures are logged but do not abort the round.
+5. **Deliver.** `sink.deliver(winning_solution).await`. The default
+   sink is `JitoSink` (next section); tests use `CaptureSink`; dev
+   mode can opt into `LoggingSink` via env.
+
+Histograms emitted: `oxdex_auctioneer_score`. Counters:
+`oxdex_auctioneer_trades_total`.
+
+### 5. Matching engine internals
+
+[`crates/oxdex-matching/src/lib.rs`](crates/oxdex-matching/src/lib.rs).
+`Matcher::match_batch(batch_id, solver, &orders) -> Solution` is pure,
+deterministic, side-effect free. Steps:
+
+1. **Group by canonical pair.** `canonical_pair(a, b) = (min(a,b), max(a,b))`.
+   This guarantees that A→B and B→A orders for the same market end up
+   in the same bucket regardless of insertion order.
+2. **Per-pair, in parallel** (`rayon::into_par_iter` if
+   `MatcherConfig.parallel` — default true). Each pair runs
+   `match_pair(token_a, token_b, &orders)`:
+   * **Split** orders by direction (`sell_mint == token_a` vs
+     `sell_mint == token_b`); malformed rows are dropped.
+   * **Sort each side** by `limit_price()` ascending (most aggressive
+     first). `limit_price = buy_amount / sell_amount` as a rational
+     `Price { num: u128, den: u128 }`.
+   * **Greedy two-pointer fill.** While the heads of both queues
+     **cross** (`lp_ab.num*lp_ba.num <= lp_ab.den*lp_ba.den`,
+     all-integer math):
+     * Compute `trade_a = min(remaining_a_sell,
+       buy_capacity_in_A_of_b_head)`.
+     * Update remaining; record fills; advance whichever side
+       exhausted.
+     * If either order has `partial_fill = false` and would only be
+       partially filled by the trade, **roll back** that fill and
+       skip the order (advance its pointer).
+     * Track the last crossing limit-price pair `(lp_ab, lp_ba)` for
+       use in step 3.
+   * **Uniform clearing price.** The midpoint of the last crossing
+     pair, computed in pure rational form to avoid float drift:
+     `mid = (p.num*q.num + p.den*q.den) / (2 * p.den * q.num)`. Both
+     reciprocals (`p_a_per_b` and `p_b_per_a`) are emitted as
+     `ClearingPrice` entries.
+   * **Re-price every fill** at the uniform price (CoW invariant:
+     everyone trades at the same price), aggregate per `OrderId` into
+     `TradeExecution { executed_sell, executed_buy }`, and
+     accumulate **surplus** (`bought - limit_price.apply(sold)`) into
+     the pair's score.
+3. **Merge** all per-pair results and return
+   `Solution { batch_id, solver, clearing_prices, trades, score }`.
+
+Determinism: same input slice → identical `Solution` regardless of the
+parallel/serial config (the `parallel_and_serial_agree` test in the
+matching crate enforces this).
+
+### 6. Settlement / Jito flow
+
+`JitoSink::deliver` in
+[`crates/oxdex-node/src/main.rs`](crates/oxdex-node/src/main.rs):
+
+1. `encode_solution_as_placeholder_tx(&solution)` — currently
+   serializes the `Solution` as JSON and base64-encodes it (a
+   placeholder; the real implementation will build a Solana versioned
+   transaction invoking the on-chain `oxdex-settlement` program).
+2. Build a `Bundle { transactions: vec![tx], tip_lamports,
+   trace_id: solution.batch_id.to_string() }`.
+3. `submitter.submit(bundle).await`:
+   * `HttpJitoClient` posts JSON-RPC `sendBundle` to the configured
+     block-engine URL with a 5-second timeout. Non-2xx → `Server`
+     error; transport failures → `Transport` error.
+   * `InMemoryJitoClient` (default in dev) appends to a
+     `Mutex<Vec<Bundle>>` and returns `inmem-N` so tests can assert.
+4. Success → `tracing::info!("bundle submitted", bundle_id, batch)`.
+   Failure → `tracing::warn!` and the round ends; **no retry storm** —
+   the next tick will simply re-seal the still-`Auctioned` orders if
+   the on-chain ack never lands. (Promotion from `Auctioned` to
+   `Filled` / rollback semantics on bundle failure are part of the
+   on-chain settlement program work.)
+
+### 7. End-to-end happy path (one wall-clock cycle)
+
+```
+t = 0 ms     POST /v1/orders                      (Alice signs sell 100 A → ≥150 B)
+              └─ validate → verify → repo.insert  → 201 {id, "open"}
+t = 5 ms     POST /v1/orders                      (Bob   signs sell 200 B → ≥100 A)
+              └─ … → 201 {id, "open"}
+
+t = 400 ms   ticker.tick() in auctioneer
+              ├─ repo.expire_due(now)             → 0 expired
+              ├─ repo.list_open(None)             → [Alice, Bob]
+              ├─ Batch { id, sealed_at, orders }  emitted
+              ├─ ReferenceSolver.solve(batch, 200ms)
+              │    └─ spawn_blocking(matcher.match_batch)
+              │         └─ canonical_pair, sort, greedy fill,
+              │            uniform mid-price, surplus scoring
+              ├─ best = Some(solution)            score > 0
+              ├─ for trade in solution.trades:
+              │    repo.update_status(id, Auctioned, exec_sell, exec_buy)
+              └─ sink.deliver(solution)
+                   └─ JitoSink → encode → InMemoryJitoClient.submit
+                                       → "inmem-0"
+                   tracing::info!("bundle submitted")
+```
+
+Subsequent ticks find no `Open` orders for those ids and the loop
+idles until new submissions arrive.
+
+### 8. Failure & recovery semantics at a glance
+
+| Failure | Where caught | User-visible result | Recovery |
+|---|---|---|---|
+| Bad JSON / missing field         | `actix-web` `Json` extractor | `400` with serde error  | Resubmit |
+| Semantic invalid (expired, etc.) | `Order::validate`            | `400 InvalidOrder`      | Fix payload |
+| Bad Ed25519 signature            | `SignedOrder::verify`        | `400 BadSignature`      | Re-sign |
+| Bad base58 / hex                 | `Address::from_str` / `parse_order_id` | `400`         | Fix encoding |
+| Duplicate submission             | `repo.insert` (UPSERT)       | `201` (idempotent)      | — |
+| Cancel without `X-Owner`         | `cancel_order`               | `400`                   | Add header |
+| Cancel by non-owner / wrong state| `repo.cancel` returns false  | `409 Conflict`          | Owner only |
+| Postgres unreachable at boot     | `PgOrderRepository::connect` | Falls back to in-memory | Restart with DB up |
+| Solver panic / timeout           | `tokio::time::timeout` in solver | Solver dropped from race | Other solvers continue |
+| Zero valid solutions             | Auctioneer                   | Round skipped, `warn!`  | Next tick |
+| Bundle submit fails              | `JitoSink::deliver`          | `warn!`, no retry       | Orders stay `Auctioned`; settlement program reconciles |
+| Auctioneer task panics           | `auc_handle.await` in `main` | `warn!` on shutdown     | Process supervisor restarts node |
+
+---
+
 ## Workspace layout
 
 | Crate | Responsibility |
