@@ -14,6 +14,19 @@ on-chain in a single Jito-bundled transaction.
 ## Table of Contents
 
 - [Architecture](#architecture)
+  - [Layered view](#layered-view)
+  - [Component reference (what / how / why)](#component-reference-what--how--why)
+    - [`oxdex-types` — shared domain model](#oxdex-types--shared-domain-model)
+    - [`oxdex-config` — layered settings loader](#oxdex-config--layered-settings-loader)
+    - [`oxdex-storage` — `OrderRepository` trait + Postgres / in-memory impls](#oxdex-storage--orderrepository-trait--postgres--in-memory-impls)
+    - [`oxdex-matching` — CoW matching engine](#oxdex-matching--cow-matching-engine)
+    - [`oxdex-solver` — pluggable `Solver` trait](#oxdex-solver--pluggable-solver-trait)
+    - [`oxdex-auctioneer` — periodic batch auction loop](#oxdex-auctioneer--periodic-batch-auction-loop)
+    - [`oxdex-jito-client` — `BundleSubmitter` to the Jito block engine](#oxdex-jito-client--bundlesubmitter-to-the-jito-block-engine)
+    - [`oxdex-intent-pool` — Actix-Web HTTP API](#oxdex-intent-pool--actix-web-http-api)
+    - [`oxdex-node` — composition root / binary](#oxdex-node--composition-root--binary)
+    - [`programs/oxdex-settlement` — on-chain Anchor program](#programsoxdex-settlement--on-chain-anchor-program)
+  - [Cross-cutting concerns](#cross-cutting-concerns)
 - [How It Works](#how-it-works)
   - [0. Process boot (`oxdex-node`)](#0-process-boot-oxdex-node)
   - [1. Order submission flow — `POST /v1/orders`](#1-order-submission-flow--post-v1orders)
@@ -85,6 +98,280 @@ on-chain in a single Jito-bundled transaction.
 The on-chain **settlement program** (Anchor) lives in
 [`programs/oxdex-settlement`](programs/oxdex-settlement) and is built
 separately with the Solana SBF toolchain.
+
+### Layered view
+
+OxDEX is split into 5 logical layers, each one depending only on the
+layer(s) below it. This is what keeps the dependency graph acyclic and
+the unit tests fast (no layer needs a database, network, or chain to
+test in isolation).
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  L5  Process / composition         oxdex-node (bin)                 │
+│      ─────────────────────────     wires every Arc<dyn …> together  │
+├─────────────────────────────────────────────────────────────────────┤
+│  L4  Edge / I/O                    oxdex-intent-pool (HTTP in)      │
+│      ─────────────────────────     oxdex-jito-client  (bundles out) │
+├─────────────────────────────────────────────────────────────────────┤
+│  L3  Orchestration                 oxdex-auctioneer (tokio task)    │
+├─────────────────────────────────────────────────────────────────────┤
+│  L2  Domain logic                  oxdex-solver  (Solver trait)     │
+│                                    oxdex-matching (pure CoW match)  │
+├─────────────────────────────────────────────────────────────────────┤
+│  L1  Foundations                   oxdex-types   (Order, Solution…) │
+│                                    oxdex-config  (Settings)         │
+│                                    oxdex-storage (OrderRepository)  │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+Every cross-layer call is a **trait object** (`Arc<dyn …>`) — never a
+concrete type — so any layer can be swapped (Postgres → in-memory,
+HTTP Jito → in-memory, etc.) without touching call sites.
+
+### Component reference (what / how / why)
+
+Each subsection below answers three questions: **What** does this
+component do? **How** is it implemented? **Why** is it shaped that
+way?
+
+#### `oxdex-types` — shared domain model
+
+* **What.** The vocabulary every other crate speaks: `Order`,
+  `SignedOrder`, `OrderId`, `OrderKind`, `OrderStatus`, `Address`,
+  `Price`, `Batch`, `BatchId`, `Solution`, `TradeExecution`,
+  `ClearingPrice`, plus the workspace-wide `OxDexError` enum.
+* **How.** Pure data + a handful of helpers. Newtype wrappers
+  (`Address([u8;32])`, `OrderId([u8;32])`, `BatchId([u8;16])`,
+  `Price { num: u128, den: u128 }`) implement `Serialize` /
+  `Deserialize`, `Display` / `FromStr`, plus rational arithmetic for
+  `Price`. `Order::id()` is a content-address: `sha256(b"oxdex/order/v1"
+  || bincode(order))`. `SignedOrder::verify()` does Ed25519
+  verification against `order.owner` as the public key.
+* **Why.** Putting the domain model in a leaf crate forces *every*
+  upstream crate (storage, matching, solver, API) to agree on byte-
+  exact shapes. Rich newtypes turn whole classes of bug into compile
+  errors (you cannot pass a `String` where an `Address` is expected,
+  cannot mix `OrderId` with `BatchId`, cannot accidentally use a
+  `f64` price). Keeping it dependency-light means adding a future
+  WASM front-end is a non-event.
+
+#### `oxdex-config` — layered settings loader
+
+* **What.** A single `Settings` struct
+  (`server` / `database` / `auction` / `solana` / `jito`) populated
+  from a deterministic merge of sources.
+* **How.** Built on the [`config`](https://docs.rs/config) crate.
+  Precedence (low → high): hard-coded defaults in `lib.rs` →
+  `config/default.toml` → `config/${RUN_MODE}.toml` → environment
+  variables prefixed `OXDEX__` with `__` as the section separator
+  (`OXDEX__AUCTION__BATCH_INTERVAL_MS=400`). `dotenvy` is honoured for
+  local `.env` files.
+* **Why.** Twelve-factor friendly. Same binary boots in dev (TOML),
+  CI (env), and prod (env + secrets manager) without code changes.
+  Hard-coded defaults guarantee the node is never *uninitialised*; you
+  can run `cargo run -p oxdex-node` with zero config and get sane
+  behaviour.
+
+#### `oxdex-storage` — `OrderRepository` trait + Postgres / in-memory impls
+
+* **What.** The persistence boundary. Defines the async, object-safe
+  `OrderRepository` trait (insert, get, list_open, update_status,
+  cancel, expire_due) plus an `OrderRecord` value object, and ships
+  two implementations.
+* **How.**
+  * `PgOrderRepository` (`postgres.rs`) — SQLx + tokio-rustls.
+    Uses an `Arc<PgPool>` with configurable min/max connections, runs
+    SQL migrations from `crates/oxdex-storage/migrations/` on boot,
+    and leans on a partial index `WHERE status = 'open'` so the
+    `list_open` hot path stays cheap as the historical book grows.
+    `cancel` is a single atomic `UPDATE … WHERE id = $1 AND owner = $2
+    AND status = 'open'` — the owner check is *part of the predicate*,
+    so there's no read-modify-write race.
+  * `InMemoryOrderRepository` (`memory.rs`) — sharded `DashMap` keyed
+    by `OrderId`. Same trait, ~zero latency, used by every unit test
+    in the workspace and as a dev-mode fallback when Postgres is
+    unreachable.
+* **Why.** A trait at this seam means matching, auctioneer, and the
+  HTTP layer have no idea whether they're talking to a database or a
+  hash map. That is what lets `cargo test --workspace` finish in
+  milliseconds with zero external services, and it is what would let
+  you add `RedisOrderRepository` later as a single-file PR.
+
+#### `oxdex-matching` — CoW matching engine
+
+* **What.** A pure function `Matcher::match_batch(batch_id, solver,
+  &orders) -> Solution`. Given an arbitrary set of signed orders it
+  returns the CoW (Coincidence-of-Wants) clearing: which orders trade
+  with which, at what uniform price, and the total user surplus
+  ("score").
+* **How.** Group orders by *unordered* token pair via
+  `canonical_pair(a,b) = (min(a,b), max(a,b))`. Process pairs in
+  parallel with `rayon::into_par_iter` (each pair is independent).
+  Inside a pair: split by direction, sort each side by limit price,
+  greedy two-pointer fill while heads cross (cross test is
+  all-integer: `lp_ab.num * lp_ba.num <= lp_ab.den * lp_ba.den`),
+  rolling back fills that would violate `partial_fill = false`.
+  The uniform clearing price is the rational midpoint of the last
+  crossing pair, and every fill is then re-priced at that uniform
+  price (the CoW invariant: *everyone* in the pair trades at the
+  same price). Surplus is accumulated as the integer difference
+  between received and limit-required output.
+* **Why.** Pure, deterministic, and parallel-by-construction. Pure ⇒
+  trivial to unit-test and to feed property-based tests. Deterministic
+  ⇒ multiple solvers running the same algorithm produce byte-exact
+  identical solutions (the `parallel_and_serial_agree` test enforces
+  this). Per-pair parallelism ⇒ scales to many CPU cores without lock
+  contention because pairs cannot interfere. Rational `Price` (no
+  floats) eliminates an entire family of consensus-breaking bugs.
+
+#### `oxdex-solver` — pluggable `Solver` trait
+
+* **What.** The abstraction the auctioneer races against. One async
+  method: `solve(&self, batch: &Batch, deadline: Duration) ->
+  Result<Solution>`. Each solver also exposes its on-chain
+  `address()` for attribution. Ships with one implementation,
+  `ReferenceSolver`, that wraps the matching engine.
+* **How.** `ReferenceSolver::solve` runs the (CPU-bound) matcher
+  inside `tokio::task::spawn_blocking` so it never stalls the reactor,
+  and wraps the join handle in `tokio::time::timeout(deadline, …)`
+  so a misbehaving solver cannot blow the auction round budget.
+* **Why.** Modelling solvers as a trait, not a function, lets future
+  solvers call out to off-chain services (Jupiter quote API, RFQ
+  providers, MEV-Search-style auctions) without touching the rest of
+  the stack. The deadline contract is what keeps the auction round
+  bounded even with adversarial solvers.
+
+#### `oxdex-auctioneer` — periodic batch auction loop
+
+* **What.** A long-lived tokio task that, every `batch_interval_ms`,
+  seals a batch from the open book, races all solvers, picks the
+  winner, marks the touched orders `Auctioned`, and hands the winning
+  `Solution` to a `SolutionSink`.
+* **How.** A single `tokio::select!` over an `mpsc` shutdown channel
+  and a `tokio::time::interval` with `MissedTickBehavior::Delay` (no
+  spinning if a tick is back-pressured). The solver race uses
+  `FuturesUnordered` so we keep the highest-score result as solvers
+  finish, never blocking on the slowest. Failing solvers are logged
+  and dropped from the round, never aborting it. Marking winners
+  `Auctioned` (per `TradeExecution`) is what prevents the next tick
+  from re-batching the same orders. `SolutionSink` is itself a trait
+  so tests can use a `CaptureSink` and prod uses `JitoSink`.
+* **Why.** The batch model is the entire point of CoW: by sealing a
+  finite window of orders and clearing them atomically at one
+  uniform price, you remove the order-arrival ordering as a profit
+  vector — i.e., MEV. Time-boxing the solver race means tail latency
+  is bounded by config, not by the slowest competitor.
+
+#### `oxdex-jito-client` — `BundleSubmitter` to the Jito block engine
+
+* **What.** The egress edge. Defines the `BundleSubmitter` trait and
+  the `Bundle { transactions, tip_lamports, trace_id }` value type,
+  plus two implementations.
+* **How.**
+  * `HttpJitoClient` — `reqwest` + `rustls`, posts JSON-RPC
+    `sendBundle` with a 5 s timeout, parses
+    `{ "result": "<bundle_id>" }`, surfaces non-2xx as
+    `BundleError::Server` and connect/read failures as
+    `BundleError::Transport`.
+  * `InMemoryJitoClient` — appends to a `Mutex<Vec<Bundle>>` and
+    returns `inmem-N`. Used by `oxdex-node`'s end-to-end test to
+    assert "a bundle was actually produced" without any network.
+* **Why.** Solana's anti-MEV story for a CoW-style DEX *is* Jito
+  bundles: a leader-routed, atomic, all-or-nothing transaction set
+  that bypasses the public mempool. Modelling submission as a trait
+  keeps the off-chain stack buildable & testable offline, and means
+  we can swap JSON-RPC for the official `jito-searcher-client` gRPC
+  with zero call-site changes.
+
+#### `oxdex-intent-pool` — Actix-Web HTTP API
+
+* **What.** The ingress edge. Exposes the JSON HTTP surface
+  (`/healthz`, `/readyz`, `POST/GET/DELETE /v1/orders`) that users and
+  front-ends speak.
+* **How.** Actix-Web with `tracing-actix-web`, `actix-cors::permissive`
+  (tighten in prod), one shared `web::Data<State { repo: Arc<dyn
+  OrderRepository> }>`. Each handler is `#[instrument]`-ed for traces,
+  bumps Prometheus counters via `metrics::counter!`, and maps domain
+  errors into HTTP via `ApiError` (`InvalidOrder | InvalidAddress |
+  BadSignature → 400`, `Conflict → 409`, `NotFound → 404`, else
+  `500`). Submission is a strict pipeline: deserialize → `Order::
+  validate(now)` → `SignedOrder::verify()` (Ed25519 over the order id)
+  → `repo.insert` (idempotent on `OrderId`).
+* **Why.** Validation before signature check before storage is
+  cheapest-first; we reject malformed payloads in microseconds and
+  never write garbage to the DB. Idempotent insert is what lets a
+  client retry a flaky `POST` safely. The single shared
+  `Arc<dyn OrderRepository>` is the *only* coupling between this
+  layer and the auctioneer — there is no in-memory queue or message
+  bus to lose data on restart.
+
+#### `oxdex-node` — composition root / binary
+
+* **What.** The single binary you actually run. It owns no business
+  logic — it just constructs everything and wires the trait objects
+  together.
+* **How.** Boots in this order: tracing → settings (`oxdex-config`)
+  → Prometheus exporter → repository (Postgres, falling back to
+  in-memory) → solver list → settlement sink (`JitoSink` wrapping
+  `InMemoryJitoClient` or `HttpJitoClient`; `LoggingSink` if
+  `OXDEX_SETTLEMENT_LOGGING_ONLY` is set) → spawn the auctioneer →
+  run the Actix server in the foreground. SIGINT / SIGTERM closes
+  the auctioneer's mpsc shutdown channel cooperatively before the
+  process exits.
+* **Why.** Centralising construction means there is exactly one place
+  where concrete types meet trait objects, which is exactly where
+  swapping implementations (e.g., enabling the real Jito gRPC client
+  in prod) needs to happen. Every other crate stays free of process-
+  lifetime concerns.
+
+#### `programs/oxdex-settlement` — on-chain Anchor program
+
+* **What.** The Solana program that, given a winning `Solution`,
+  performs the SPL token transfers and accounting on-chain. Currently
+  ships as a scaffold with the public instruction surface and PDA
+  layout but stubbed instruction bodies; the off-chain stack treats
+  the bundle's first transaction as a placeholder.
+* **How.** Anchor framework (separate workspace, built with the
+  Solana SBF toolchain). Lives outside the main Cargo workspace
+  (`exclude = ["programs/oxdex-settlement"]` in the root
+  `Cargo.toml`) so a normal `cargo test --workspace` does not require
+  the Solana toolchain.
+* **Why.** Two-workspace split keeps off-chain CI fast (~seconds) and
+  decouples the off-chain release cadence from the much slower
+  on-chain audit/upgrade cycle. The off-chain stack is fully
+  testable end-to-end against `InMemoryJitoClient` while the program
+  is being hardened.
+
+### Cross-cutting concerns
+
+These are not their own crates but they touch every layer:
+
+* **Errors.** A single `OxDexError` enum (`oxdex-types::error`) with
+  an `is_retriable()` helper. Each layer's local error type
+  (`RepoError`, `BundleError`, `ApiError`) implements `From<…>` into
+  it, so propagation is `?` and never a `match` ladder. The HTTP
+  layer's `ApiError` is the only place that maps to status codes.
+* **Tracing.** `tracing` everywhere; every public async fn on the hot
+  path carries `#[instrument]`. The HTTP layer adds
+  `tracing-actix-web::TracingLogger` so each request gets a span with
+  method/path/status. `RUST_LOG` controls verbosity at runtime.
+* **Metrics.** `metrics` facade with a `metrics-exporter-prometheus`
+  HTTP listener on `:9100` (override via `OXDEX_METRICS_PORT`).
+  Counters like `oxdex_orders_submitted_total`,
+  `oxdex_orders_cancelled_total`, `oxdex_auctioneer_batches_total`,
+  `oxdex_auctioneer_trades_total`, plus the
+  `oxdex_auctioneer_score` histogram, are emitted from the relevant
+  components.
+* **Concurrency model.** Tokio multi-threaded runtime everywhere;
+  CPU-bound matching is always pushed to `spawn_blocking`; per-pair
+  matching uses Rayon's data-parallel pool; storage uses SQLx's async
+  pool; the auctioneer uses `FuturesUnordered` to consume solver
+  results as they arrive without head-of-line blocking.
+* **Shutdown.** Cooperative. Actix returns from `HttpServer::run` on
+  signal, the binary then sends `()` on the auctioneer's `mpsc`
+  shutdown channel and `await`s the join handle. No data loss
+  because Postgres is the source of truth and matching is stateless.
 
 ---
 
